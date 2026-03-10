@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Connection {
+  id                  String    @id @default(cuid())
+  name                String
+  provider            String // "github" | "azure_repos"
+  authMethod          String // "github_app" | "oauth_app" | "pat" | "service_principal"
+  providerAccountName String
+  providerUrl         String
+  secretToken         String?
+  secretLastFour      String?
+  isDefault           Boolean   @default(false)
+  status              String // "active" | "expiring" | "expired" | "revoked" | "error"
+  scopes              String[]
+  expiresAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  linkedAccounts LinkedAccount[]
+  repositories   LinkedRepository[]
+}
+
+model LinkedAccount {
+  id               String      @id @default(cuid())
+  displayName      String
+  providerUsername String
+  email            String
+  provider         String
+  authMethod       String
+  status           String
+  avatarUrl        String?
+  connectionId     String?
+  connection       Connection? @relation(fields: [connectionId], references: [id])
+  expiresAt        DateTime?
+  lastUsedAt       DateTime?
+  createdAt        DateTime    @default(now())
+
+  assumedByRepos LinkedRepository[] @relation("AssumeAccount")
+}
+
+model LinkedRepository {
+  id              String         @id @default(cuid())
+  name            String
+  fullName        String
+  provider        String
+  connectionId    String
+  connection      Connection     @relation(fields: [connectionId], references: [id])
+  defaultBranch   String
+  identityMode    String // "service_account" | "assume_user"
+  assumeAccountId String?
+  assumeAccount   LinkedAccount? @relation("AssumeAccount", fields: [assumeAccountId], references: [id])
+  indexEnabled    Boolean        @default(false)
+  defaultReviewer String?
+  webhookActive   Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  webhooks WebhookConfig[]
+}
+
+model WebhookConfig {
+  id               String           @id @default(cuid())
+  repositoryId     String
+  repository       LinkedRepository @relation(fields: [repositoryId], references: [id])
+  event            String
+  endpointPath     String
+  active           Boolean          @default(true)
+  secretConfigured Boolean          @default(false)
+  lastTriggeredAt  DateTime?
+  createdAt        DateTime         @default(now())
+}
+
+model MaskingRule {
+  id          String   @id @default(cuid())
+  pattern     String
+  description String
+  enabled     Boolean  @default(true)
+  builtIn     Boolean  @default(false)
+  regex       String?
+  createdAt   DateTime @default(now())
+}
+
+// ─── Core Domain Models ───────────────────────────────
+
+model WorkItem {
+  id                 String   @id @default(cuid())
+  azureId            Int      @unique
+  title              String
+  description        String
+  userQuery          String? // The actual instruction the user gives Trooper
+  type               String // "feature" | "bug" | "vulnerability"
+  status             String   @default("pending") // WorkItemStatus enum values
+  assignedTo         String?
+  repositoryFullName String? // e.g. "sarem/my-repo" — the target repo for this work
+  targetBranch       String? // branch to base off (defaults to repo default)
+  linkedRunId        String?
+  linkedPRId         String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  agentRuns    AgentRun[]
+  pullRequests PullRequest[]
+}
+
+model AgentRun {
+  id                    String    @id @default(cuid())
+  workItemId            String?
+  workItem              WorkItem? @relation(fields: [workItemId], references: [id])
+  repositoryFullName    String? // e.g. "sarem/my-repo"
+  userQuery             String? // The instruction for this specific run
+  status                String    @default("queued") // AgentRunStatus enum values
+  branchName            String?
+  prId                  String?
+  error                 String? // error message if status=failed
+  planSummary           String? // The generated plan summary
+  planFiles             Json? // Array of files to change/create
+  totalPromptTokens     Int? // Accumulated prompt tokens across all LLM calls
+  totalCompletionTokens Int? // Accumulated completion tokens
+  totalTokens           Int? // Grand total (prompt + completion)
+  currentIteration      Int? // Current iteration in the code-verify loop
+  maxIterations         Int? // Configured max iterations (default: 5)
+  lastChanges           Json? // Snapshot of changes[] for resuming after "Continue"
+  startedAt             DateTime  @default(now())
+  completedAt           DateTime?
+
+  steps        AgentStep[]
+  pullRequests PullRequest[]
+
+  @@index([status])
+}
+
+model AgentStep {
+  id         String   @id @default(cuid())
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  type       String // AgentStepType enum values
+  status     String   @default("completed") // "running" | "completed" | "failed"
+  label      String
+  detail     String?
+  order      Int      @default(0)
+  durationMs Int?
+  timestamp  DateTime @default(now())
+
+  @@index([runId])
+}
+
+model PullRequest {
+  id                 String    @id @default(cuid())
+  prNumber           Int? // GitHub PR number
+  azurePRId          Int?      @unique
+  title              String
+  sourceBranch       String
+  targetBranch       String
+  status             String    @default("open") // PRStatus enum values
+  reviewerAlias      String?
+  rejectionComment   String?
+  workItemId         String?
+  workItem           WorkItem? @relation(fields: [workItemId], references: [id])
+  runId              String
+  run                AgentRun  @relation(fields: [runId], references: [id])
+  url                String
+  repositoryFullName String? // e.g. "sarem/my-repo"
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([runId])
+  @@index([status])
+}
+
+model IndexState {
+  id           String    @id @default(cuid())
+  tenantId     String    @default("default")
+  repository   String
+  branch       String
+  status       String    @default("idle") // IndexStatus enum values
+  totalFiles   Int       @default(0)
+  indexedFiles Int       @default(0)
+  lastSyncAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([tenantId, repository, branch])
+}
+
+model MaskingAuditEntry {
+  id            String   @id @default(cuid())
+  runId         String
+  pattern       String
+  matchCount    Int
+  filesAffected String[]
+  timestamp     DateTime @default(now())
+
+  @@index([runId])
+}

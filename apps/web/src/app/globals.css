@@ -1,0 +1,164 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────
+  Trooper Design System
+  Enterprise-first, Azure-inspired shell.
+  Light default with strong semantic accents.
+  ────────────────────────────────────────────── */
+
+@theme inline {
+  /* Font families */
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  /* ── Surface palette ── */
+  --color-canvas-default: #e7ebf0;
+  --color-canvas-subtle: #f0f3f7;
+  --color-canvas-inset: #dce3eb;
+  --color-canvas-overlay: #f4f6f9;
+
+  /* ── Border palette ── */
+  --color-border-default: #7f8b99;
+  --color-border-muted: #96a1ae;
+  --color-border-subtle: #7f8b9966;
+
+  /* ── Text palette ── */
+  --color-fg-default: #1f2937;
+  --color-fg-muted: #4a5565;
+  --color-fg-subtle: #667283;
+  --color-fg-on-emphasis: #ffffff;
+
+  /* ── Primary accent ── */
+  --color-accent-fg: #0078d4;
+  --color-accent-emphasis: #106ebe;
+  --color-accent-muted: #0078d433;
+  --color-accent-subtle: #eff6fc;
+
+  /* ── Semantic: danger ── */
+  --color-danger-fg: #d13438;
+  --color-danger-emphasis: #a4262c;
+  --color-danger-subtle: #fde7e9;
+
+  /* ── Semantic: warning ── */
+  --color-warning-fg: #986f0b;
+  --color-warning-emphasis: #8a6200;
+  --color-warning-subtle: #fff4ce;
+
+  /* ── Semantic: severe (orange) ── */
+  --color-severe-fg: #d83b01;
+  --color-severe-emphasis: #b83200;
+  --color-severe-subtle: #fef0e5;
+
+  /* ── Semantic: info ── */
+  --color-info-fg: #0078d4;
+  --color-info-emphasis: #106ebe;
+  --color-info-subtle: #eff6fc;
+
+  /* ── Semantic: done / merged ── */
+  --color-done-fg: #5c2e91;
+  --color-done-emphasis: #4b256f;
+  --color-done-subtle: #f3effa;
+
+  /* ── Semantic: success ── */
+  --color-success-fg: #0e7a0d;
+  --color-success-emphasis: #107c10;
+  --color-success-subtle: #dff6dd;
+
+  /* ── Neutral ── */
+  --color-neutral-muted: #c9d1da;
+  --color-attention-fg: #986f0b;
+
+  /* ── Rail / sidebar ── */
+  --color-sidebar-bg: #fbfbfc;
+  --color-sidebar-surface: #ffffff;
+  --color-sidebar-hover: #f3f8fd;
+  --color-sidebar-active: #e8f3fc;
+  --color-sidebar-indicator: #0078d4;
+
+  /* ── Header ── */
+  --color-header-bg: #ffffff;
+
+  /* ── Border radii ── */
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+}
+
+/* ── Base ── */
+html {
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--color-canvas-default);
+  color: var(--color-fg-default);
+  font-family: "Segoe UI Variable Text", "Segoe UI", var(--font-sans), -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes trooper-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.trooper-shimmer {
+  background-color: rgba(127, 139, 153, 0.14);
+  background-image: linear-gradient(
+    110deg,
+    rgba(255, 255, 255, 0.06) 8%,
+    rgba(255, 255, 255, 0.58) 18%,
+    rgba(255, 255, 255, 0.06) 33%
+  );
+  background-size: 220% 100%;
+  animation: trooper-shimmer 1.7s linear infinite;
+}
+
+/* ── Scrollbar (GitHub-style thin) ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-default) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-default);
+  border-radius: 4px;
+}
+
+#__next {
+  min-height: 100vh;
+}
+
+/* ── Focus ring ── */
+*:focus-visible {
+  outline: 2px solid var(--color-accent-fg);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Selection ── */
+::selection {
+  background: var(--color-accent-muted);
+  color: var(--color-fg-on-emphasis);
+}
+
+/* ── Flush layout: pages that opt-in remove shell padding ── */
+main:has([data-flush-layout]) {
+  padding: 0;
+  overflow: hidden;
+}
