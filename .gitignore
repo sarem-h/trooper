@@ -8,11 +8,16 @@ out/
 
 # turbo
 .turbo/
+*.tsbuildinfo
 
 # env
 .env
 .env.local
 .env.*.local
+
+# runtime logs
+*.log
+*.err
 
 # os
 .DS_Store
