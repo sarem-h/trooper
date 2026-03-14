@@ -5,7 +5,8 @@ Trooper is an AI-assisted software delivery platform for engineering teams. It c
 ## Links
 
 - Repository: https://github.com/sarem-h/trooper
-- Public deployment: not currently published from this repository snapshot
+- Public deployment: https://trooper-web.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io
+- Public API: https://trooper-api.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io/api
 - Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - RAG design: [RAG_ARCHITECTURE.md](./RAG_ARCHITECTURE.md)
 
@@ -20,6 +21,17 @@ Trooper is designed around a practical engineering constraint: AI coding systems
 5. Mask secrets, create branches, and open pull requests.
 
 The result is a system intended for software engineering and DevOps workflows where explainability, operational awareness, and safe automation matter more than raw code generation.
+
+## Reviewer Deployment
+
+The current public environment is intended for technical review and product evaluation.
+
+- Web: https://trooper-web.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io
+- API: https://trooper-api.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io/api
+- Health: https://trooper-api.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io/api/health
+- Readiness: https://trooper-api.agreeablemushroom-b414d76f.eastus2.azurecontainerapps.io/api/health/ready
+
+Deployment is running on Azure Container Apps with Azure Container Registry for image builds, Azure Database for PostgreSQL for state, Azure OpenAI for model access, and Azure AI Search for repository-grounded retrieval.
 
 ## What Trooper Currently Does
 
@@ -156,7 +168,7 @@ The repository includes a GitHub Actions workflow at [.github/workflows/ci.yml](
 
 ## Current Status
 
-This project is an active implementation rather than a finished commercial release. The current codebase already demonstrates:
+This project is an active implementation rather than a finished commercial release. A public reviewer environment is now published on Azure Container Apps, backed by Azure Database for PostgreSQL, Azure OpenAI, and Azure AI Search. The current codebase already demonstrates:
 
 - end-to-end pipeline orchestration
 - repository indexing and retrieval
@@ -164,7 +176,7 @@ This project is an active implementation rather than a finished commercial relea
 - provider connection management
 - reviewer-facing operational UI
 
-The main remaining gap for a public evaluator is deployment packaging. The architecture documents in this repository call that out explicitly: the system is currently validated in local and cloud-backed development infrastructure, but not yet published as a public production app from this repository.
+The current public deployment is intended for review and evaluation rather than production traffic. It provides a working end-to-end environment for exploring the UI, repository indexing surfaces, grounded Copilot flows, and provider connection management.
 
 ## Why This Project Matters
 

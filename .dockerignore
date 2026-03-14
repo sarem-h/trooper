@@ -1,0 +1,17 @@
+node_modules
+.git
+.github
+.next
+dist
+out
+.turbo
+coverage
+*.log
+*.err
+.env
+.env.*
+*.tsbuildinfo
+apps/api/api.log
+apps/api/api.err
+apps/web/.next
+apps/api/dist

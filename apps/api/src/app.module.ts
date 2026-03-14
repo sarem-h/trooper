@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { HealthController } from './health.controller';
+import { HealthService } from './health.service';
 import { AgentModule } from './modules/agent/agent.module';
 import { WorkItemsModule } from './modules/work-items/work-items.module';
 import { ConnectionsModule } from './modules/connections/connections.module';
@@ -37,7 +39,7 @@ import { PrismaModule } from './prisma/prisma.module';
     LlmModule,
     CopilotModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [AppController, HealthController],
+  providers: [AppService, HealthService],
 })
 export class AppModule {}

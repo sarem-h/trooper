@@ -1,5 +1,5 @@
 # Base image
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
@@ -17,14 +17,17 @@ RUN turbo prune @trooper/api --docker
 FROM base AS installer
 WORKDIR /app
 # First install dependencies (as they change less often)
-COPY .gitignore .gitignore
+RUN touch .gitignore
 COPY --from=builder /app/out/json/ .
 COPY --from=builder /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+RUN echo 'shamefully-hoist=true' > .npmrc
 RUN pnpm install --frozen-lockfile
 
 # Build the project and its dependencies
 COPY --from=builder /app/out/full/ .
 COPY turbo.json turbo.json
+# Fix binary permissions (Windows → Linux transfer loses +x)
+RUN find /app -path '*/node_modules/.bin/*' -exec chmod +x {} + 2>/dev/null || true
 # Generate Prisma Client and build the API
 RUN pnpm turbo run build --filter=@trooper/api...
 
@@ -43,4 +46,4 @@ EXPOSE 3001
 ENV PORT=3001
 ENV NODE_ENV=production
 
-CMD ["node", "dist/main.js"]
+CMD ["node", "--require", "tsx/cjs", "dist/main.js"]
