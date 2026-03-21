@@ -71,6 +71,14 @@ const alertTypeLabels: Record<string, string> = {
   secret_scanning: "Secret Scanning",
 };
 
+function decodeRepoSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 // ─── Page ───────────────────────────────────────────
 
 export default function SecurityAlertDetailPage() {
@@ -82,9 +90,10 @@ export default function SecurityAlertDetailPage() {
   }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const repoFullName = `${params.owner}/${params.repo}`;
+  const repoFullName = `${decodeRepoSegment(params.owner)}/${decodeRepoSegment(params.repo)}`;
   const alertId = parseInt(params.id, 10);
   const branch = searchParams.get("branch") ?? undefined;
+  const provider = searchParams.get("provider") ?? undefined;
   const repoHubQuery = searchParams.toString();
   const repoHubHref = repoHubQuery ? `/repos/${repoFullName}?${repoHubQuery}` : `/repos/${repoFullName}`;
 
@@ -98,7 +107,8 @@ export default function SecurityAlertDetailPage() {
       const data = await pipelineApi.getSecurityAlert(
         repoFullName,
         params.alertType,
-        alertId
+        alertId,
+        provider,
       );
       setAlert(data);
     } catch (err) {
@@ -106,7 +116,7 @@ export default function SecurityAlertDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [repoFullName, params.alertType, alertId]);
+  }, [alertId, params.alertType, provider, repoFullName]);
 
   useEffect(() => {
     loadAlert();

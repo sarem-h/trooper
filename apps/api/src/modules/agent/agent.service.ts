@@ -9,7 +9,13 @@ export class AgentService {
 
   async findAllRuns() {
     return this.prisma.client.agentRun.findMany({
-      include: { steps: true, workItem: true },
+      include: {
+        steps: true,
+        workItem: true,
+        pullRequests: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
       orderBy: { startedAt: 'desc' },
     });
   }
@@ -17,7 +23,13 @@ export class AgentService {
   async findOneRun(id: string) {
     const run = await this.prisma.client.agentRun.findUnique({
       where: { id },
-      include: { steps: { orderBy: { timestamp: 'asc' } }, workItem: true },
+      include: {
+        steps: { orderBy: { timestamp: 'asc' } },
+        workItem: true,
+        pullRequests: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
     });
     if (!run) throw new NotFoundException(`AgentRun ${id} not found`);
     return run;

@@ -25,18 +25,40 @@ export class PipelineController {
 
   /**
    * GET /api/pipeline/repos
-   * List or search GitHub repositories accessible globally or via user token,
+   * List or search repositories accessible across all registered providers,
    * enriched with RAG index status.
    */
   @Get('repos')
-  async listRepos(@Query('q') query?: string, @Query('page') page?: string) {
-    let repos = [];
-    if (query && query.trim().length > 0) {
-      repos = await this.scm.getDefault().searchRepos(query.trim(), page ? parseInt(page, 10) : 1);
-    } else {
-      repos = await this.scm.getDefault().listRepos();
+  async listRepos(@Query('q') query?: string, @Query('page') page?: string, @Query('provider') providerFilter?: string) {
+    const providerTypes = this.scm.listProviderTypes();
+    let repos: any[] = [];
+
+    // Gather repos from all registered providers (or just the filtered one)
+    const targetProviders = providerFilter
+      ? providerTypes.filter((p) => p === providerFilter)
+      : providerTypes;
+
+    const results = await Promise.allSettled(
+      targetProviders.map(async (providerType) => {
+        const provider = this.scm.get(providerType);
+        try {
+          if (query && query.trim().length > 0) {
+            return await provider.searchRepos(query.trim(), page ? parseInt(page, 10) : 1);
+          }
+          return await provider.listRepos();
+        } catch (err: any) {
+          this.logger.debug(`Failed to list repos from ${providerType}: ${err.message}`);
+          return [];
+        }
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        repos = repos.concat(result.value);
+      }
     }
-    
+
     const indexStates = await this.prisma.client.indexState.findMany();
     const indexMap = new Map(
       indexStates.map((s) => [`${s.repository}:${s.branch}`, s]),
@@ -63,9 +85,11 @@ export class PipelineController {
   async getRepo(
     @Param('owner') owner: string,
     @Param('repo') repo: string,
+    @Query('provider') providerHint?: string,
   ) {
     const fullName = `${owner}/${repo}`;
-    const result: any = await this.scm.getDefault().getRepo(fullName);
+    const provider = await this.scm.resolveForRepoAsync(fullName, providerHint);
+    const result: any = await provider.getRepo(fullName);
     const state = await this.prisma.client.indexState.findFirst({
       where: {
         tenantId: 'default',
@@ -107,8 +131,10 @@ export class PipelineController {
   async listBranches(
     @Param('owner') owner: string,
     @Param('repo') repo: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().listBranches(`${owner}/${repo}`);
+    const fullName = `${owner}/${repo}`;
+    return (await this.scm.resolveForRepoAsync(fullName, provider)).listBranches(fullName);
   }
 
   /**
@@ -244,10 +270,12 @@ export class PipelineController {
     @Query('per_page') perPage?: string,
     @Query('page') page?: string,
     @Query('q') search?: string,
+    @Query('provider') provider?: string,
   ) {
     try {
-      return await this.scm.getDefault().listIssues(
-        `${owner}/${repo}`,
+      const fullName = `${owner}/${repo}`;
+      return await (await this.scm.resolveForRepoAsync(fullName, provider)).listIssues(
+        fullName,
         state,
         perPage ? parseInt(perPage, 10) : undefined,
         page ? parseInt(page, 10) : undefined,
@@ -269,9 +297,11 @@ export class PipelineController {
     @Param('owner') owner: string,
     @Param('repo') repo: string,
     @Param('issueNumber') issueNumber: string,
+    @Query('provider') provider?: string,
   ) {
     try {
-      return await this.scm.getDefault().getIssue(`${owner}/${repo}`, parseInt(issueNumber, 10));
+      const fullName = `${owner}/${repo}`;
+      return await (await this.scm.resolveForRepoAsync(fullName, provider)).getIssue(fullName, parseInt(issueNumber, 10));
     } catch (err: any) {
       if (err?.status === 403) throw new ForbiddenException('Token lacks issues:read permission for this repository');
       if (err?.status === 404) throw new NotFoundException('Issue not found');
@@ -289,9 +319,11 @@ export class PipelineController {
     @Param('repo') repo: string,
     @Param('issueNumber') issueNumber: string,
     @Body() dto: { body: string },
+    @Query('provider') provider?: string,
   ) {
     try {
-      return await this.scm.getDefault().postIssueComment(`${owner}/${repo}`, parseInt(issueNumber, 10), dto.body);
+      const fullName = `${owner}/${repo}`;
+      return await (await this.scm.resolveForRepoAsync(fullName, provider)).postIssueComment(fullName, parseInt(issueNumber, 10), dto.body);
     } catch (err: any) {
       if (err?.status === 403) throw new ForbiddenException('Token lacks issues:write permission for this repository');
       if (err?.status === 404) throw new NotFoundException('Issue not found');
@@ -313,14 +345,22 @@ export class PipelineController {
     @Query('per_page') perPage?: string,
     @Query('page') page?: string,
     @Query('sort') sort?: 'updated' | 'created',
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().listPullRequests(
-      `${owner}/${repo}`,
-      state,
-      perPage ? parseInt(perPage, 10) : undefined,
-      page ? parseInt(page, 10) : undefined,
-      sort,
-    );
+    try {
+      const fullName = `${owner}/${repo}`;
+      return await (await this.scm.resolveForRepoAsync(fullName, provider)).listPullRequests(
+        fullName,
+        state,
+        perPage ? parseInt(perPage, 10) : undefined,
+        page ? parseInt(page, 10) : undefined,
+        sort,
+      );
+    } catch (err: any) {
+      if (err?.status === 403) throw new ForbiddenException('Token lacks pull_requests:read permission for this repository');
+      if (err?.status === 404) throw new NotFoundException('Repository not found');
+      throw err;
+    }
   }
 
   /**
@@ -332,8 +372,16 @@ export class PipelineController {
     @Param('owner') owner: string,
     @Param('repo') repo: string,
     @Param('prNumber') prNumber: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().getPullRequest(`${owner}/${repo}`, parseInt(prNumber, 10));
+    try {
+      const fullName = `${owner}/${repo}`;
+      return await (await this.scm.resolveForRepoAsync(fullName, provider)).getPullRequest(fullName, parseInt(prNumber, 10));
+    } catch (err: any) {
+      if (err?.status === 403) throw new ForbiddenException('Token lacks pull_requests:read permission for this repository');
+      if (err?.status === 404) throw new NotFoundException('Pull request not found');
+      throw err;
+    }
   }
 
   /**
@@ -346,8 +394,10 @@ export class PipelineController {
     @Param('repo') repo: string,
     @Param('prNumber') prNumber: string,
     @Body() dto: { body: string },
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().postPRComment(`${owner}/${repo}`, parseInt(prNumber, 10), dto.body);
+    const fullName = `${owner}/${repo}`;
+    return (await this.scm.resolveForRepoAsync(fullName, provider)).postPRComment(fullName, parseInt(prNumber, 10), dto.body);
   }
 
   /**
@@ -361,8 +411,10 @@ export class PipelineController {
     @Param('repo') repo: string,
     @Param('prNumber') prNumber: string,
     @Body() dto: { method?: 'merge' | 'squash' | 'rebase' },
+    @Query('provider') provider?: string,
   ) {
-    await this.scm.getDefault().mergePullRequest(`${owner}/${repo}`, parseInt(prNumber, 10), dto.method);
+    const fullName = `${owner}/${repo}`;
+    await (await this.scm.resolveForRepoAsync(fullName, provider)).mergePullRequest(fullName, parseInt(prNumber, 10), dto.method);
     return { success: true };
   }
 
@@ -376,8 +428,10 @@ export class PipelineController {
     @Param('owner') owner: string,
     @Param('repo') repo: string,
     @Param('prNumber') prNumber: string,
+    @Query('provider') provider?: string,
   ) {
-    await this.scm.getDefault().closePullRequest(`${owner}/${repo}`, parseInt(prNumber, 10));
+    const fullName = `${owner}/${repo}`;
+    await (await this.scm.resolveForRepoAsync(fullName, provider)).closePullRequest(fullName, parseInt(prNumber, 10));
     return { success: true };
   }
 
@@ -405,8 +459,10 @@ export class PipelineController {
     @Param('repo') repo: string,
     @Param('alertType') alertType: string,
     @Param('alertId') alertId: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().getSecurityAlert(`${owner}/${repo}`, parseInt(alertId, 10), alertType);
+    const fullName = `${owner}/${repo}`;
+    return (await this.scm.resolveForRepoAsync(fullName, provider)).getSecurityAlert(fullName, parseInt(alertId, 10), alertType);
   }
 
   // ─── Auto-Draft Flow ─────────────────────────────────────
@@ -482,8 +538,10 @@ export class PipelineController {
   async getRepoActivity(
     @Param('owner') owner: string,
     @Param('repo') repo: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().getRepoActivity(`${owner}/${repo}`);
+    const fullName = `${owner}/${repo}`;
+    return (await this.scm.resolveForRepoAsync(fullName, provider)).getRepoActivity(fullName);
   }
 
   /**
@@ -494,8 +552,10 @@ export class PipelineController {
   async getRepoLanguages(
     @Param('owner') owner: string,
     @Param('repo') repo: string,
+    @Query('provider') provider?: string,
   ) {
-    return this.scm.getDefault().listLanguages(`${owner}/${repo}`);
+    const fullName = `${owner}/${repo}`;
+    return (await this.scm.resolveForRepoAsync(fullName, provider)).listLanguages(fullName);
   }
 
   // ─── SCM Provider Info ────────────────────────────────────

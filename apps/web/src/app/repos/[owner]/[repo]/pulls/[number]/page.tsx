@@ -117,6 +117,14 @@ function prStateIcon(pr: PRDetail) {
   return GitPullRequest;
 }
 
+function decodeRepoSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 const reviewStateLabels: Record<string, { label: string; variant: string }> = {
   APPROVED: { label: "Approved", variant: "success" },
   CHANGES_REQUESTED: { label: "Changes requested", variant: "danger" },
@@ -131,9 +139,10 @@ export default function PRDetailPage() {
   const params = useParams<{ owner: string; repo: string; number: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const repoFullName = `${params.owner}/${params.repo}`;
+  const repoFullName = `${decodeRepoSegment(params.owner)}/${decodeRepoSegment(params.repo)}`;
   const prNumber = parseInt(params.number, 10);
   const branch = searchParams.get("branch") ?? undefined;
+  const provider = searchParams.get("provider") ?? undefined;
   const repoHubQuery = searchParams.toString();
   const repoHubHref = repoHubQuery ? `/repos/${repoFullName}?${repoHubQuery}` : `/repos/${repoFullName}`;
 
@@ -155,14 +164,14 @@ export default function PRDetailPage() {
   const loadPR = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await pipelineApi.getPull(repoFullName, prNumber);
+      const data = await pipelineApi.getPull(repoFullName, prNumber, provider);
       setPr(data);
     } catch (err) {
       console.error("Failed to load PR:", err);
     } finally {
       setLoading(false);
     }
-  }, [repoFullName, prNumber]);
+  }, [prNumber, provider, repoFullName]);
 
   useEffect(() => {
     loadPR();
@@ -190,7 +199,7 @@ export default function PRDetailPage() {
   async function handleMerge() {
     setMerging(true);
     try {
-      await pipelineApi.mergePR(repoFullName, prNumber, mergeMethod);
+      await pipelineApi.mergePR(repoFullName, prNumber, mergeMethod, provider);
       await loadPR();
     } catch (err) {
       console.error("Failed to merge:", err);
@@ -202,7 +211,7 @@ export default function PRDetailPage() {
   async function handleClose() {
     setClosing(true);
     try {
-      await pipelineApi.closePR(repoFullName, prNumber);
+      await pipelineApi.closePR(repoFullName, prNumber, provider);
       await loadPR();
     } catch (err) {
       console.error("Failed to close:", err);
@@ -218,7 +227,8 @@ export default function PRDetailPage() {
       const newComment = await pipelineApi.postPRComment(
         repoFullName,
         prNumber,
-        commentBody.trim()
+        commentBody.trim(),
+        provider,
       );
       setPr((prev) =>
         prev

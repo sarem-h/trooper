@@ -300,6 +300,43 @@ export interface CopilotQuery {
   includeGroundingTrace?: boolean;
 }
 
+export interface SkillDraftRequest {
+  prompt: string;
+  currentSpecFull?: string;
+  currentSpecUi?: string;
+  modelId?: string;
+  draftMode?: 'new' | 'refine';
+}
+
+export interface SkillDraftResponse {
+  specFull: string;
+  specUi: string;
+  changeSummary: string;
+  modelId: string;
+  modelLabel: string;
+}
+
+export interface SkillRunRequest {
+  repositoryFullName: string;
+  branch: string;
+  skillName: string;
+  prompt: string;
+  skillSpecFull: string;
+  modelId?: string;
+}
+
+export interface SkillRunResponse {
+  headline: string;
+  resultMarkdown: string;
+  evidence: string[];
+  repositoryFullName: string;
+  branch: string;
+  modelId: string;
+  modelLabel: string;
+  retrievedChunkCount: number;
+  retrievedFiles: string[];
+}
+
 /* ───────────────────────────────────────
    Task context & auto-drafting
    ─────────────────────────────────────── */

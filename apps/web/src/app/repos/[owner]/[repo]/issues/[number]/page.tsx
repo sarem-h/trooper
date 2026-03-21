@@ -80,15 +80,24 @@ function labelStyle(color: string) {
   };
 }
 
+function decodeRepoSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 // ─── Page ───────────────────────────────────────────
 
 export default function IssueDetailPage() {
   const params = useParams<{ owner: string; repo: string; number: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const repoFullName = `${params.owner}/${params.repo}`;
+  const repoFullName = `${decodeRepoSegment(params.owner)}/${decodeRepoSegment(params.repo)}`;
   const issueNumber = parseInt(params.number, 10);
   const branch = searchParams.get("branch") ?? undefined;
+  const provider = searchParams.get("provider") ?? undefined;
   const repoHubQuery = searchParams.toString();
   const repoHubHref = repoHubQuery ? `/repos/${repoFullName}?${repoHubQuery}` : `/repos/${repoFullName}`;
 
@@ -103,14 +112,14 @@ export default function IssueDetailPage() {
   const loadIssue = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await pipelineApi.getIssue(repoFullName, issueNumber);
+      const data = await pipelineApi.getIssue(repoFullName, issueNumber, provider);
       setIssue(data);
     } catch (err) {
       console.error("Failed to load issue:", err);
     } finally {
       setLoading(false);
     }
-  }, [repoFullName, issueNumber]);
+  }, [issueNumber, provider, repoFullName]);
 
   useEffect(() => {
     loadIssue();
@@ -142,7 +151,8 @@ export default function IssueDetailPage() {
       const newComment = await pipelineApi.postIssueComment(
         repoFullName,
         issueNumber,
-        commentBody.trim()
+        commentBody.trim(),
+        provider,
       );
       setIssue((prev) =>
         prev ? { ...prev, comments: [...prev.comments, newComment] } : prev

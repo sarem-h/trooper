@@ -79,3 +79,24 @@ export const CopilotAskSchema = CopilotQuerySchema.extend({
 });
 
 export type CopilotAskDto = z.infer<typeof CopilotAskSchema>;
+
+export const SkillDraftSchema = z.object({
+  prompt: z.string().min(1),
+  currentSpecFull: z.string().optional(),
+  currentSpecUi: z.string().optional(),
+  modelId: z.string().min(1).optional(),
+  draftMode: z.enum(["new", "refine"]).optional(),
+});
+
+export type SkillDraftDto = z.infer<typeof SkillDraftSchema>;
+
+export const SkillRunSchema = z.object({
+  repositoryFullName: z.string().min(1),
+  branch: z.string().min(1),
+  skillName: z.string().min(1),
+  prompt: z.string().min(1),
+  skillSpecFull: z.string().min(1),
+  modelId: z.string().min(1).optional(),
+});
+
+export type SkillRunDto = z.infer<typeof SkillRunSchema>;

@@ -8,17 +8,24 @@ import type { ScmIssueDetail, ScmPullRequest } from '../pipeline/scm';
 import type {
   CopilotCardResponse,
   CopilotGroundingStageName,
-  CopilotGroundingStageTrace,
   CopilotGroundingTrace,
   CopilotModelOption,
   CopilotQuery,
+  SkillDraftRequest,
+  SkillDraftResponse,
+  SkillRunRequest,
+  SkillRunResponse,
 } from '@trooper/shared';
 import {
   SUMMARIZE_SYSTEM_PROMPT,
   GROUND_SYSTEM_PROMPT,
   ASK_SYSTEM_PROMPT,
+  DRAFT_SKILL_SYSTEM_PROMPT,
+  RUN_SKILL_SYSTEM_PROMPT,
   COPILOT_CARD_RESPONSE_SCHEMA,
   ASK_RESPONSE_SCHEMA,
+  SKILL_DRAFT_RESPONSE_SCHEMA,
+  SKILL_RUN_RESPONSE_SCHEMA,
 } from './copilot.prompts';
 
 // ─── Context Budget Constants ─────────────────────────────
@@ -66,7 +73,8 @@ const FALLBACK_RESPONSE: CopilotCardResponse = {
     'Copilot could not generate a summary because the Azure OpenAI request was rejected.',
   suggestionsMarkdown:
     '- Verify `AZURE_OPENAI_API_KEY`\n- Verify `AZURE_OPENAI_ENDPOINT` points to the same Azure OpenAI resource\n- Restart the API after updating `.env`',
-  riskMarkdown: 'Summaries and follow-up answers will stay unavailable until the LLM configuration is fixed.',
+  riskMarkdown:
+    'Summaries and follow-up answers will stay unavailable until the LLM configuration is fixed.',
   evidence: ['Azure OpenAI returned 401'],
   suggestedActions: [],
 };
@@ -90,7 +98,133 @@ export class CopilotService {
   }
 
   listModels(): CopilotModelOption[] {
-    return this.modelConfigs.map(({ deployment: _deployment, ...model }) => model);
+    return this.modelConfigs.map((config) => {
+      const { deployment, ...model } = config;
+      void deployment;
+      return model;
+    });
+  }
+
+  async draftSkill(request: SkillDraftRequest): Promise<SkillDraftResponse> {
+    const model = this.resolveModel(request.modelId);
+    const userMessage = [
+      `Draft mode: ${request.draftMode ?? 'new'}`,
+      `Authoring prompt:\n${request.prompt.trim()}`,
+      request.currentSpecFull?.trim()
+        ? `Current full execution draft:\n${request.currentSpecFull.trim()}`
+        : 'Current full execution draft: none yet.',
+      request.currentSpecUi?.trim()
+        ? `Current UI draft:\n${request.currentSpecUi.trim()}`
+        : 'Current UI draft: none yet.',
+    ].join('\n\n');
+
+    const result = await this.llm.chat({
+      model: model.tier,
+      deployment: model.deployment,
+      messages: [
+        { role: 'system', content: DRAFT_SKILL_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      responseSchema: SKILL_DRAFT_RESPONSE_SCHEMA,
+      temperature: 0.3,
+      maxTokens: 4000,
+    });
+
+    const parsed = JSON.parse(result.message.content ?? '{}') as {
+      specFull?: string;
+      specUi?: string;
+      changeSummary?: string;
+    };
+
+    return {
+      specFull: parsed.specFull?.trim() || request.currentSpecFull || '',
+      specUi: parsed.specUi?.trim() || request.currentSpecUi || parsed.specFull?.trim() || request.currentSpecFull || '',
+      changeSummary: parsed.changeSummary?.trim() || 'Updated the skill draft.',
+      modelId: model.id,
+      modelLabel: model.label,
+    };
+  }
+
+  async runSkill(request: SkillRunRequest): Promise<SkillRunResponse> {
+    const model = this.resolveModel(
+      request.modelId && request.modelId !== 'balanced'
+        ? request.modelId
+        : 'quality',
+    );
+    const retrievalQuery = this.buildSkillExecutionQuery(request);
+    const chunks = await this.rag.queryRelevantChunks(
+      request.repositoryFullName,
+      request.branch,
+      retrievalQuery,
+      20,
+    );
+
+    if (chunks.length === 0) {
+      throw new Error(
+        `No indexed repository context was found for ${request.repositoryFullName}@${request.branch}.`,
+      );
+    }
+
+    const chunkSection = chunks
+      .map((chunk, index) =>
+        [
+          `### Chunk ${index + 1}`,
+          `File: ${chunk.filePath}`,
+          `Language: ${chunk.language}`,
+          `Symbol: ${chunk.symbolName || 'n/a'}`,
+          chunk.content,
+        ].join('\n'),
+      )
+      .join('\n\n');
+
+    const userMessage = [
+      `Repository: ${request.repositoryFullName}`,
+      `Branch: ${request.branch}`,
+      `Skill: ${request.skillName}`,
+      'Primary instruction: analyze the selected repository and produce the final engineering artifact, not a rewritten skill specification.',
+      `Operator intent hint:\n${request.prompt.trim()}`,
+      `Saved skill contract (source of execution guidance):\n${request.skillSpecFull.trim()}`,
+      `Retrieved code context:\n${chunkSection}`,
+    ].join('\n\n');
+
+    const result = await this.llm.chat({
+      model: model.tier,
+      deployment: model.deployment,
+      messages: [
+        { role: 'system', content: RUN_SKILL_SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+      responseSchema: SKILL_RUN_RESPONSE_SCHEMA,
+      temperature: 0.2,
+      maxTokens: 5000,
+    });
+
+    const parsed = JSON.parse(result.message.content ?? '{}') as {
+      headline?: string;
+      resultMarkdown?: string;
+      evidence?: string[];
+    };
+
+    const retrievedFiles = Array.from(
+      new Set(chunks.map((chunk) => chunk.filePath)),
+    ).slice(0, 8);
+
+    return {
+      headline: parsed.headline?.trim() || `${request.skillName} result`,
+      resultMarkdown:
+        parsed.resultMarkdown?.trim() || 'No result was generated.',
+      evidence: Array.isArray(parsed.evidence)
+        ? parsed.evidence
+            .filter((value) => typeof value === 'string' && value.trim())
+            .slice(0, 8)
+        : [],
+      repositoryFullName: request.repositoryFullName,
+      branch: request.branch,
+      modelId: model.id,
+      modelLabel: model.label,
+      retrievedChunkCount: chunks.length,
+      retrievedFiles,
+    };
   }
 
   /**
@@ -125,11 +259,19 @@ export class CopilotService {
    * Deep analysis using RAG code context + thread context + thinker model.
    * Supports stage-by-stage verification so failures are attributable.
    */
-  async ground(query: CopilotQuery, defaultBranch: string): Promise<CopilotCardResponse> {
+  async ground(
+    query: CopilotQuery,
+    defaultBranch: string,
+  ): Promise<CopilotCardResponse> {
     const searchQuery = `${query.title} ${query.body}`.slice(0, 500);
     const model = this.resolveModel(query.modelId);
-    const stageLimit = this.normalizeGroundingStageLimit(query.groundingStageLimit);
-    const trace = this.createGroundingTrace(query.includeGroundingTrace === true || stageLimit !== undefined, stageLimit);
+    const stageLimit = this.normalizeGroundingStageLimit(
+      query.groundingStageLimit,
+    );
+    const trace = this.createGroundingTrace(
+      query.includeGroundingTrace === true || stageLimit !== undefined,
+      stageLimit,
+    );
 
     let chunks: RetrievedChunk[] = [];
     let thread: ThreadContext = {};
@@ -142,9 +284,11 @@ export class CopilotService {
       this.completeGroundingStage(
         trace,
         1,
-        `Loaded ${query.type === 'issue'
-          ? `${thread.issueDetail?.comments?.length ?? 0} issue comments`
-          : `${thread.pullDetail?.comments?.length ?? 0} PR comments, ${thread.pullDetail?.reviews?.length ?? 0} reviews, ${thread.pullDetail?.diffFiles?.length ?? 0} diff files`}`,
+        `Loaded ${
+          query.type === 'issue'
+            ? `${thread.issueDetail?.comments?.length ?? 0} issue comments`
+            : `${thread.pullDetail?.comments?.length ?? 0} PR comments, ${thread.pullDetail?.reviews?.length ?? 0} reviews, ${thread.pullDetail?.diffFiles?.length ?? 0} diff files`
+        }`,
         Date.now() - stage1Start,
       );
       if (stageLimit === 1) {
@@ -170,8 +314,15 @@ export class CopilotService {
         if (trace) {
           trace.ragDegraded = true;
         }
-        this.failGroundingStage(trace, 2, `RAG retrieval failed: ${this.stringifyError(err)}`, Date.now() - stage2Start);
-        this.logger.warn(`RAG retrieval failed, falling back to metadata-only: ${err}`);
+        this.failGroundingStage(
+          trace,
+          2,
+          `RAG retrieval failed: ${this.stringifyError(err)}`,
+          Date.now() - stage2Start,
+        );
+        this.logger.warn(
+          `RAG retrieval failed, falling back to metadata-only: ${err}`,
+        );
       }
       if (stageLimit === 2) {
         return this.buildGroundingVerificationResponse(query, trace);
@@ -213,9 +364,19 @@ export class CopilotService {
       const stage5Start = Date.now();
       const parsed = this.parseResponseDetailed(result.message.content);
       if (parsed.ok) {
-        this.completeGroundingStage(trace, 5, 'Structured JSON response parsed successfully', Date.now() - stage5Start);
+        this.completeGroundingStage(
+          trace,
+          5,
+          'Structured JSON response parsed successfully',
+          Date.now() - stage5Start,
+        );
       } else {
-        this.failGroundingStage(trace, 5, 'Model response did not parse as valid Copilot JSON', Date.now() - stage5Start);
+        this.failGroundingStage(
+          trace,
+          5,
+          'Model response did not parse as valid Copilot JSON',
+          Date.now() - stage5Start,
+        );
       }
       if (stageLimit === 5) {
         return this.buildGroundingVerificationResponse(query, trace);
@@ -233,7 +394,9 @@ export class CopilotService {
         this.completeGroundingStage(
           trace,
           6,
-          ragDegraded ? 'Returned grounded response with RAG degradation noted' : 'Returned grounded response',
+          ragDegraded
+            ? 'Returned grounded response with RAG degradation noted'
+            : 'Returned grounded response',
           Date.now() - stage6Start,
         );
         response.groundingTrace = trace;
@@ -279,8 +442,12 @@ export class CopilotService {
         temperature: 0.3,
       });
 
-      const parsed = JSON.parse(result.message.content ?? '{}');
-      return { answerMarkdown: parsed.answerMarkdown ?? 'No answer available.' };
+      const parsed = this.parseObject<{ answerMarkdown?: string }>(
+        result.message.content,
+      );
+      return {
+        answerMarkdown: parsed.answerMarkdown ?? 'No answer available.',
+      };
     } catch (err: any) {
       this.logCopilotFailure('ask', err);
       if (this.isAuthError(err)) {
@@ -289,7 +456,9 @@ export class CopilotService {
             'Copilot could not answer because the Azure OpenAI request was rejected. Check `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, then restart the API.',
         };
       }
-      return { answerMarkdown: 'The assistant was unable to answer this question.' };
+      return {
+        answerMarkdown: 'The assistant was unable to answer this question.',
+      };
     }
   }
 
@@ -299,18 +468,28 @@ export class CopilotService {
    * Fetch full thread context (comments, reviews, diffs) from the SCM provider.
    * Degrades gracefully — returns empty context on failure.
    */
-  private async fetchThreadContext(query: CopilotQuery): Promise<ThreadContext> {
+  private async fetchThreadContext(
+    query: CopilotQuery,
+  ): Promise<ThreadContext> {
     try {
       const scm = this.scmRegistry.resolveForRepo(query.repositoryFullName);
       if (query.type === 'issue') {
-        const detail = await scm.getIssue(query.repositoryFullName, query.refNumber);
+        const detail = await scm.getIssue(
+          query.repositoryFullName,
+          query.refNumber,
+        );
         return { issueDetail: detail };
       } else {
-        const detail = await scm.getPullRequest(query.repositoryFullName, query.refNumber);
+        const detail = await scm.getPullRequest(
+          query.repositoryFullName,
+          query.refNumber,
+        );
         return { pullDetail: detail };
       }
     } catch (err) {
-      this.logger.warn(`Thread context fetch failed for ${query.type} #${query.refNumber}: ${err}`);
+      this.logger.warn(
+        `Thread context fetch failed for ${query.type} #${query.refNumber}: ${err}`,
+      );
       return {};
     }
   }
@@ -354,7 +533,9 @@ export class CopilotService {
       const d = thread.pullDetail;
       if (d.user) parts.push(`**Author:** @${d.user.login}`);
       if (d.sourceBranch && d.targetBranch) {
-        parts.push(`**Source → Target:** ${d.sourceBranch} → ${d.targetBranch}`);
+        parts.push(
+          `**Source → Target:** ${d.sourceBranch} → ${d.targetBranch}`,
+        );
       } else if (query.branch) {
         parts.push(`**Branch:** ${query.branch}`);
       }
@@ -366,14 +547,19 @@ export class CopilotService {
           `**Changes:** +${d.additions} / -${d.deletions} across ${fileCount} file${fileCount === 1 ? '' : 's'}${d.commitsCount ? ` (${d.commitsCount} commit${d.commitsCount === 1 ? '' : 's'})` : ''}`,
         );
       }
-      if (d.mergeable != null) parts.push(`**Mergeable:** ${d.mergeable ? 'yes' : 'no'}`);
-      if (d.isDraft != null) parts.push(`**Draft:** ${d.isDraft ? 'yes' : 'no'}`);
-      if (d.reviewDecision) parts.push(`**Review Decision:** ${d.reviewDecision}`);
+      if (d.mergeable != null)
+        parts.push(`**Mergeable:** ${d.mergeable ? 'yes' : 'no'}`);
+      if (d.isDraft != null)
+        parts.push(`**Draft:** ${d.isDraft ? 'yes' : 'no'}`);
+      if (d.reviewDecision)
+        parts.push(`**Review Decision:** ${d.reviewDecision}`);
     } else {
       // Fallback: use what's in the query
       if (query.branch) parts.push(`**Branch:** ${query.branch}`);
       if (query.changedFiles?.length) {
-        parts.push(`**Changed Files:** ${query.changedFiles.slice(0, 20).join(', ')}`);
+        parts.push(
+          `**Changed Files:** ${query.changedFiles.slice(0, 20).join(', ')}`,
+        );
       }
     }
 
@@ -397,7 +583,10 @@ export class CopilotService {
 
     if (comments?.length) {
       const shown = comments.slice(0, MAX_COMMENTS);
-      const countNote = comments.length > shown.length ? `, showing newest ${shown.length}` : '';
+      const countNote =
+        comments.length > shown.length
+          ? `, showing newest ${shown.length}`
+          : '';
       parts.push(
         `\n## Discussion Thread (${comments.length} comment${comments.length === 1 ? '' : 's'}${countNote})`,
       );
@@ -417,7 +606,9 @@ export class CopilotService {
       );
       for (const r of reviews) {
         const author = r.user ? `@${r.user.login}` : 'Unknown';
-        parts.push(`\n### ${author} — ${r.state}${r.submittedAt ? ` (${r.submittedAt})` : ''}`);
+        parts.push(
+          `\n### ${author} — ${r.state}${r.submittedAt ? ` (${r.submittedAt})` : ''}`,
+        );
         if (r.body) {
           parts.push(truncate(r.body, REVIEW_BODY_LIMIT));
         }
@@ -428,12 +619,15 @@ export class CopilotService {
     if (query.type === 'pull' && thread?.pullDetail?.diffFiles?.length) {
       const allDiffs = thread.pullDetail.diffFiles;
       const diffs = allDiffs.slice(0, MAX_DIFF_FILES);
-      const overflowNote = allDiffs.length > diffs.length ? `, showing ${diffs.length}` : '';
+      const overflowNote =
+        allDiffs.length > diffs.length ? `, showing ${diffs.length}` : '';
       parts.push(
         `\n## File Changes (${allDiffs.length} file${allDiffs.length === 1 ? '' : 's'}${overflowNote})`,
       );
       for (const f of diffs) {
-        parts.push(`\n### ${f.filename} (${f.status}, +${f.additions} / -${f.deletions})`);
+        parts.push(
+          `\n### ${f.filename} (${f.status}, +${f.additions} / -${f.deletions})`,
+        );
         if (f.patch) {
           parts.push('```diff');
           parts.push(truncate(f.patch, DIFF_PATCH_LIMIT));
@@ -458,12 +652,17 @@ export class CopilotService {
     return parts.join('\n');
   }
 
-  private normalizeGroundingStageLimit(stageLimit?: number): number | undefined {
+  private normalizeGroundingStageLimit(
+    stageLimit?: number,
+  ): number | undefined {
     if (!stageLimit) return undefined;
     return Math.max(1, Math.min(GROUNDING_STAGE_TOTAL, Math.floor(stageLimit)));
   }
 
-  private createGroundingTrace(enabled: boolean, stageLimit?: number): CopilotGroundingTrace | undefined {
+  private createGroundingTrace(
+    enabled: boolean,
+    stageLimit?: number,
+  ): CopilotGroundingTrace | undefined {
     if (!enabled) return undefined;
 
     return {
@@ -516,10 +715,15 @@ export class CopilotService {
     trace.completedStage = Math.max(trace.completedStage, stageId - 1);
   }
 
-  private failCurrentGroundingStage(trace: CopilotGroundingTrace | undefined, err: unknown): void {
+  private failCurrentGroundingStage(
+    trace: CopilotGroundingTrace | undefined,
+    err: unknown,
+  ): void {
     if (!trace) return;
 
-    const currentStage = trace.stages.find((stage) => stage.status === 'pending');
+    const currentStage = trace.stages.find(
+      (stage) => stage.status === 'pending',
+    );
     if (!currentStage) return;
 
     currentStage.status = 'failed';
@@ -535,16 +739,20 @@ export class CopilotService {
       for (const stage of trace.stages) {
         if (stage.id > trace.completedStage && stage.status === 'pending') {
           stage.status = 'skipped';
-          stage.detail = stage.id === trace.completedStage + 1
-            ? 'Not executed yet — increase the stage limit to continue verification.'
-            : 'Skipped because verification stopped earlier in the pipeline.';
+          stage.detail =
+            stage.id === trace.completedStage + 1
+              ? 'Not executed yet — increase the stage limit to continue verification.'
+              : 'Skipped because verification stopped earlier in the pipeline.';
         }
       }
     }
 
-    const nextStage = trace && trace.completedStage < trace.totalStages
-      ? GROUNDING_STAGE_DEFINITIONS.find((stage) => stage.id === trace.completedStage + 1)
-      : undefined;
+    const nextStage =
+      trace && trace.completedStage < trace.totalStages
+        ? GROUNDING_STAGE_DEFINITIONS.find(
+            (stage) => stage.id === trace.completedStage + 1,
+          )
+        : undefined;
 
     return {
       headline: `Grounding pipeline verified through stage ${trace?.completedStage ?? 0}/${trace?.totalStages ?? GROUNDING_STAGE_TOTAL}`,
@@ -556,20 +764,36 @@ export class CopilotService {
       suggestionsMarkdown: nextStage
         ? `- Review the stage trace below for timings and details\n- Increase the stage cap to **${nextStage.id}** to verify the next integration point\n- Keep using the same issue or pull request while advancing stages so the signal stays stable`
         : '- Review the full trace below\n- The grounded pipeline completed end to end in verification mode',
-      riskMarkdown: 'This is a verification response, not a final grounded Copilot analysis. The model output may not have been executed yet.',
-      evidence: trace?.stages
-        .filter((stage) => stage.status === 'completed')
-        .map((stage) => `Stage ${stage.id} (${stage.label}) completed${stage.durationMs !== undefined ? ` in ${stage.durationMs}ms` : ''}`)
-        ?? [],
+      riskMarkdown:
+        'This is a verification response, not a final grounded Copilot analysis. The model output may not have been executed yet.',
+      evidence:
+        trace?.stages
+          .filter((stage) => stage.status === 'completed')
+          .map(
+            (stage) =>
+              `Stage ${stage.id} (${stage.label}) completed${stage.durationMs !== undefined ? ` in ${stage.durationMs}ms` : ''}`,
+          ) ?? [],
       suggestedActions: [],
       groundingTrace: trace,
     };
   }
 
-  private parseResponseDetailed(content: string | null): { response: CopilotCardResponse; ok: boolean } {
+  private parseResponseDetailed(content: string | null): {
+    response: CopilotCardResponse;
+    ok: boolean;
+  } {
     const text = content ?? '{}';
     try {
-      const parsed = JSON.parse(text);
+      const parsed = this.parseObject<{
+        headline?: string;
+        status?: CopilotCardResponse['status'];
+        confidence?: CopilotCardResponse['confidence'];
+        summaryMarkdown?: string;
+        suggestionsMarkdown?: string;
+        riskMarkdown?: string;
+        evidence?: string[];
+        suggestedActions?: CopilotCardResponse['suggestedActions'];
+      }>(text);
       return {
         ok: true,
         response: {
@@ -580,11 +804,15 @@ export class CopilotService {
           suggestionsMarkdown: parsed.suggestionsMarkdown ?? '',
           riskMarkdown: parsed.riskMarkdown || undefined,
           evidence: Array.isArray(parsed.evidence) ? parsed.evidence : [],
-          suggestedActions: Array.isArray(parsed.suggestedActions) ? parsed.suggestedActions : [],
+          suggestedActions: Array.isArray(parsed.suggestedActions)
+            ? parsed.suggestedActions
+            : [],
         },
       };
     } catch {
-      this.logger.error(`Failed to parse copilot response JSON: ${text.slice(0, 200)}`);
+      this.logger.error(
+        `Failed to parse copilot response JSON: ${text.slice(0, 200)}`,
+      );
       return { response: FALLBACK_RESPONSE, ok: false };
     }
   }
@@ -603,14 +831,21 @@ export class CopilotService {
     return this.parseResponseDetailed(content).response;
   }
 
-  private isAuthError(err: unknown): err is { status?: number; message?: string } {
+  private isAuthError(
+    err: unknown,
+  ): err is { status?: number; message?: string } {
     if (!err || typeof err !== 'object') return false;
 
     const candidate = err as { status?: number; message?: string };
-    return candidate.status === 401 || candidate.message?.includes('401') === true;
+    return (
+      candidate.status === 401 || candidate.message?.includes('401') === true
+    );
   }
 
-  private logCopilotFailure(operation: 'summarize' | 'ground' | 'ask', err: unknown): void {
+  private logCopilotFailure(
+    operation: 'summarize' | 'ground' | 'ask',
+    err: unknown,
+  ): void {
     if (this.isAuthError(err)) {
       this.logger.warn(
         `Copilot ${operation} failed: Azure OpenAI rejected the request. Check AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT.`,
@@ -618,7 +853,20 @@ export class CopilotService {
       return;
     }
 
-    this.logger.error(`Copilot ${operation} failed: ${err}`);
+    this.logger.error(
+      `Copilot ${operation} failed: ${this.stringifyError(err)}`,
+    );
+  }
+
+  private parseObject<T extends object>(content: string | null): T {
+    const raw = content ?? '{}';
+    const parsed: unknown = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {} as T;
+    }
+
+    return parsed as T;
   }
 
   private buildFallbackResponse(query: CopilotQuery): CopilotCardResponse {
@@ -636,44 +884,63 @@ export class CopilotService {
         description: 'Recommended default for issue and PR summaries.',
         tier: 'worker',
         deployment:
-          this.config.get<string>('AZURE_OPENAI_COPILOT_BALANCED_DEPLOYMENT')
-          ?? this.config.get<string>('AZURE_OPENAI_WORKER_DEPLOYMENT')
-          ?? 'gpt-4.1-mini',
+          this.config.get<string>('AZURE_OPENAI_COPILOT_BALANCED_DEPLOYMENT') ??
+          this.config.get<string>('AZURE_OPENAI_WORKER_DEPLOYMENT') ??
+          'gpt-4.1-mini',
         isDefault: true,
       },
       {
         id: 'quality',
         label: 'gpt-4.1',
-        description: 'Higher quality summaries when accuracy matters more than latency.',
+        description:
+          'Higher quality summaries when accuracy matters more than latency.',
         tier: 'thinker',
         deployment:
-          this.config.get<string>('AZURE_OPENAI_COPILOT_QUALITY_DEPLOYMENT')
-          ?? this.config.get<string>('AZURE_OPENAI_THINKER_DEPLOYMENT')
-          ?? 'gpt-4.1',
+          this.config.get<string>('AZURE_OPENAI_COPILOT_QUALITY_DEPLOYMENT') ??
+          this.config.get<string>('AZURE_OPENAI_THINKER_DEPLOYMENT') ??
+          'gpt-4.1',
         isDefault: false,
       },
       {
         id: 'reasoning',
         label: 'gpt-5.1-thinking',
-        description: 'Best for complex repository analysis and ambiguous changes.',
+        description:
+          'Best for complex repository analysis and ambiguous changes.',
         tier: 'thinker',
         deployment:
-          this.config.get<string>('AZURE_OPENAI_COPILOT_REASONING_DEPLOYMENT')
-          ?? 'gpt-5.1-thinking',
+          this.config.get<string>(
+            'AZURE_OPENAI_COPILOT_REASONING_DEPLOYMENT',
+          ) ?? 'gpt-5.1-thinking',
         isDefault: false,
       },
     ];
   }
 
+  private buildSkillExecutionQuery(request: SkillRunRequest): string {
+    return [
+      request.skillName,
+      request.prompt,
+      request.skillSpecFull,
+      'analyze the repository architecture using indexed code evidence',
+      'system boundaries runtime layers services modules packages applications integrations persistence auth queues messaging api database deployment infrastructure docker ci cd prisma next nest turbo mermaid',
+    ]
+      .join('\n\n')
+      .slice(0, 6000);
+  }
+
   private resolveModel(modelId?: string): CopilotModelConfig {
-    const fallback = this.modelConfigs.find((model) => model.isDefault) ?? this.modelConfigs[0];
+    const fallback =
+      this.modelConfigs.find((model) => model.isDefault) ??
+      this.modelConfigs[0];
     if (!fallback) {
       return {
         id: 'balanced',
         label: 'Balanced',
         description: 'Recommended default for issue and PR summaries.',
         tier: 'worker' as ModelTier,
-        deployment: this.config.get<string>('AZURE_OPENAI_WORKER_DEPLOYMENT') ?? 'gpt-4.1-mini',
+        deployment:
+          this.config.get<string>('AZURE_OPENAI_WORKER_DEPLOYMENT') ??
+          'gpt-4.1-mini',
         isDefault: true,
       };
     }
@@ -682,7 +949,9 @@ export class CopilotService {
 
     const selected = this.modelConfigs.find((model) => model.id === modelId);
     if (!selected) {
-      this.logger.warn(`Unknown Copilot model id "${modelId}". Falling back to ${fallback.id}.`);
+      this.logger.warn(
+        `Unknown Copilot model id "${modelId}". Falling back to ${fallback.id}.`,
+      );
       return fallback;
     }
 

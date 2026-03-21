@@ -1,5 +1,7 @@
+export { ScmModule } from './scm.module';
 export { ScmRegistry } from './scm.registry';
 export { GitHubScmProvider } from './github.scm-provider';
+export { AzureDevOpsScmProvider } from './azure-devops.scm-provider';
 export type {
   ScmProvider,
   ScmCapabilities,

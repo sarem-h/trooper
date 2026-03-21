@@ -151,6 +151,13 @@ Expected local endpoints:
 - Web: `http://localhost:3000`
 - API: `http://localhost:3001/api`
 
+For local network access, the web and API dev servers bind to all interfaces. Open Trooper from another device on your LAN with your machine's IP:
+
+- Web: `http://<your-lan-ip>:3000`
+- API: `http://<your-lan-ip>:3001/api`
+
+If you need to lock CORS down further, set `CORS_ORIGIN` to a comma-separated allowlist such as `http://localhost:3000,http://192.168.1.42:3000`.
+
 ### Build
 
 ```bash

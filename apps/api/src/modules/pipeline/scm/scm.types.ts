@@ -186,6 +186,10 @@ export interface ScmForkResult {
 export interface PaginatedList<T> {
   items: T[];
   totalCount: number;
+  availability?: {
+    status: 'ok' | 'limited';
+    reason?: string;
+  };
 }
 
 // ─── Provider Interface ─────────────────────────────────

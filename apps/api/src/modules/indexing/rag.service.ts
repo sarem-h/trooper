@@ -11,6 +11,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { LlmService } from '../llm/llm.service';
 import { GitHubService } from '../pipeline/github.service';
+import { ScmRegistry } from '../pipeline/scm';
 import { chunkFile, shouldIndex, detectLanguage, detectContentType, type ContentType } from './chunker';
 import type { CodeChunk } from './chunker';
 
@@ -83,6 +84,7 @@ export class RagService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
     private readonly github: GitHubService,
+    private readonly scm: ScmRegistry,
   ) {
     this.endpoint = this.config.get<string>('AZURE_SEARCH_ENDPOINT') ?? '';
     this.apiKey = this.config.get<string>('AZURE_SEARCH_API_KEY') ?? '';
@@ -231,7 +233,8 @@ export class RagService implements OnModuleInit {
 
     try {
       // 1. Fetch file tree
-      const tree = await this.github.getTree(repository, branch);
+      const provider = this.scm.resolveForRepo(repository);
+      const tree = await provider.getTree(repository, branch);
       const files = tree
         .filter((f) => f.type === 'file' && shouldIndex(f.path))
         .filter((f) => f.size < 100_000); // skip files > 100KB
@@ -269,7 +272,7 @@ export class RagService implements OnModuleInit {
         const contents = await Promise.all(
           batch.map(async (f) => {
             try {
-              const fc = await this.github.getFileContent(repository, f.path, branch);
+              const fc = await provider.getFileContent(repository, f.path, branch);
               return { path: f.path, content: fc.content, sha: fc.sha };
             } catch {
               return null;

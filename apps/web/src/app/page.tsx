@@ -97,9 +97,9 @@ export default function DashboardPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <CardTitle>Recent Agent Runs</CardTitle>
+            <CardTitle>Recent Activity</CardTitle>
             <a
-              href="/agent"
+              href="/work-items"
               className="flex items-center gap-1 text-xs text-[var(--color-accent-fg)] hover:underline"
             >
               View all <ArrowRight className="h-3 w-3" />

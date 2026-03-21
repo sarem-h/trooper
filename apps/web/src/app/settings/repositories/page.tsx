@@ -136,11 +136,10 @@ export default function RepositoriesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium text-[var(--color-fg-default)]">
-            Linked Repositories
+            Repositories
           </h2>
           <p className="text-xs text-[var(--color-fg-muted)]">
-            Repositories Trooper monitors for work items and submits pull
-            requests to
+            Define which repositories Trooper can act on, which connection they inherit, and whether indexing, identity overrides, and webhook automation are enabled.
           </p>
         </div>
         <Button size="sm" variant="default" className="gap-2">
@@ -149,37 +148,23 @@ export default function RepositoriesPage() {
         </Button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        {[
-          { label: "Total Repos", value: repos.length },
-          {
-            label: "RAG Indexed",
-            value: repos.filter((r) => r.indexEnabled).length,
-          },
-          {
-            label: "Assume User",
-            value: repos.filter(
-              (r) => r.identityMode === IdentityMode.AssumeUser
-            ).length,
-          },
-          {
-            label: "Webhooks Active",
-            value: repos.filter((r) => r.webhookActive).length,
-          },
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-3 py-2 text-center"
-          >
-            <p className="text-lg font-semibold text-[var(--color-fg-default)]">
-              {stat.value}
-            </p>
-            <p className="text-[11px] text-[var(--color-fg-muted)]">
-              {stat.label}
-            </p>
-          </div>
-        ))}
+      <div className="flex flex-wrap gap-2">
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {repos.length} linked repos
+        </span>
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {repos.filter((r) => r.indexEnabled).length} indexed
+        </span>
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {repos.filter((r) => r.identityMode === IdentityMode.AssumeUser).length} assume-user
+        </span>
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {repos.filter((r) => r.webhookActive).length} webhook-enabled
+        </span>
+      </div>
+
+      <div className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-4 py-3 text-xs leading-5 text-[var(--color-fg-muted)]">
+        Repository policy is the right place for advanced behavior. If a repo needs assume-user authorship or inbound webhooks, configure that against the repository rather than as a separate global settings step.
       </div>
 
       {azureRepos.length > 0 && (
@@ -205,6 +190,12 @@ export default function RepositoriesPage() {
               <RepoCard key={repo.id} repo={repo} />
             ))}
           </div>
+        </div>
+      )}
+
+      {repos.length === 0 && (
+        <div className="rounded-lg border border-dashed border-[var(--color-border-default)] bg-white px-4 py-5 text-sm text-[var(--color-fg-subtle)]">
+          No repositories linked yet. Add a repository once you have a provider connection configured.
         </div>
       )}
     </div>

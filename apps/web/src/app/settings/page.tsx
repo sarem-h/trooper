@@ -9,14 +9,11 @@ import {
   Link2,
   LoaderCircle,
   Plus,
-  ServerCog,
-  ShieldCheck,
   Star,
   Trash2,
   X,
   XCircle,
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { connections as connectionsApi, repositories as repositoriesApi } from "@/lib/api";
@@ -72,6 +69,41 @@ function daysUntil(dateStr?: string) {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
+function formatScopeLabel(provider: GitProvider, scope: string) {
+  if (provider === GitProvider.GitHub) {
+    const githubLabels: Record<string, string> = {
+      repo: "Repos",
+      workflow: "Actions",
+      user: "User",
+      gist: "Gists",
+      notifications: "Notifications",
+      'read:org': "Org Read",
+      'write:repo_hook': "Webhooks",
+      'admin:repo_hook': "Webhook Admin",
+      'read:user': "Profile Read",
+    };
+
+    return githubLabels[scope] ?? scope.replace(/^read:/, "Read ").replace(/^write:/, "Write ").replace(/^admin:/, "Admin ");
+  }
+
+  const azureLabels: Record<string, string> = {
+    'vso.project': "Projects",
+    'vso.code': "Code",
+    'vso.work': "Work Items",
+    'vso.build': "Builds",
+    'vso.release': "Releases",
+  };
+
+  return azureLabels[scope] ?? scope.replace(/^vso\./, "").replace(/(^|\.)\w/g, (part) => part.toUpperCase());
+}
+
+function scopeVariant(scope: string): "default" | "info" | "success" | "warning" {
+  if (scope.includes("code") || scope.includes("repo") || scope.includes("workflow")) return "success";
+  if (scope.includes("work") || scope.includes("project") || scope.includes("org")) return "info";
+  if (scope.includes("build") || scope.includes("release") || scope.includes("hook")) return "warning";
+  return "default";
+}
+
 function buildDraft(provider: GitProvider): ProviderDraft {
   return {
     provider,
@@ -100,7 +132,7 @@ function AddConnectionModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.28)] px-4 py-8 backdrop-blur-[2px]">
       <div className="w-full max-w-3xl rounded-3xl border border-[var(--color-border-default)] bg-[linear-gradient(180deg,_rgba(255,255,255,0.98),_rgba(240,243,247,0.98))] shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
-        <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] px-6 py-5">
+        <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] px-8 py-6">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--color-accent-emphasis)]">
               Add Connection
@@ -123,41 +155,38 @@ function AddConnectionModal({
         </div>
 
         {!draft ? (
-          <div className="grid gap-4 px-6 py-6 sm:grid-cols-2">
+          <div className="grid gap-5 px-8 py-8 sm:grid-cols-2">
             {[GitProvider.GitHub, GitProvider.AzureRepos].map((provider) => (
               <button
                 key={provider}
                 type="button"
                 onClick={() => onDraftChange(buildDraft(provider))}
-                className="rounded-2xl border border-[var(--color-border-default)] bg-white p-5 text-left shadow-[0_12px_30px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-[var(--color-accent-fg)] hover:shadow-[0_20px_40px_rgba(15,23,42,0.08)]"
+                className="rounded-2xl border border-[var(--color-border-default)] bg-white p-6 text-left shadow-[0_2px_8px_rgba(15,23,42,0.06)] transition hover:-translate-y-0.5 hover:border-[var(--color-accent-fg)] hover:shadow-[0_12px_32px_rgba(15,23,42,0.1)]"
               >
-                <div className="flex items-center gap-3 text-[var(--color-fg-default)]">
-                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
-                    {providerIcon(provider)}
-                  </span>
-                  <div>
-                    <p className="text-base font-semibold">{providerName(provider)}</p>
-                    <p className="text-xs text-[var(--color-fg-muted)]">
-                      {provider === GitProvider.GitHub
-                        ? "Name + PAT. Trooper will detect the account automatically."
-                        : "Name + org URL + PAT for Azure DevOps organizations."}
-                    </p>
-                  </div>
-                </div>
+                <span className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
+                  {providerIcon(provider)}
+                </span>
+                <p className="text-base font-semibold text-[var(--color-fg-default)]">{providerName(provider)}</p>
+                <p className="mt-2 text-sm leading-relaxed text-[var(--color-fg-muted)]">
+                  {provider === GitProvider.GitHub
+                    ? "Name + PAT. Trooper will detect the account automatically."
+                    : "Name + org URL + PAT for Azure DevOps organizations."}
+                </p>
               </button>
             ))}
           </div>
         ) : (
-          <div className="space-y-6 px-6 py-6">
-            <div className="flex items-center gap-3 rounded-2xl border border-[var(--color-border-default)] bg-white px-4 py-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
+          <div className="px-8 py-8">
+            {/* Provider summary */}
+            <div className="flex items-center gap-4 rounded-2xl border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle,_#f6f8fa)] px-5 py-4">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
                 {providerIcon(draft.provider)}
               </span>
-              <div className="flex-1">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-[var(--color-fg-default)]">
                   {providerName(draft.provider)}
                 </p>
-                <p className="text-xs text-[var(--color-fg-muted)]">
+                <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
                   {draft.provider === GitProvider.GitHub
                     ? "Enter a label and PAT. Trooper will fill in the account details for you."
                     : "Enter a label, Azure DevOps organization URL, and PAT."}
@@ -168,8 +197,9 @@ function AddConnectionModal({
               </Button>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="space-y-2 text-sm text-[var(--color-fg-default)]">
+            {/* Connection fields */}
+            <div className="mt-8 grid gap-6 sm:grid-cols-2">
+              <label className="flex flex-col gap-2 text-sm text-[var(--color-fg-default)]">
                 <span className="font-medium">Connection name</span>
                 <input
                   className={INPUT_CLASS}
@@ -182,7 +212,7 @@ function AddConnectionModal({
               </label>
 
               {draft.provider === GitProvider.AzureRepos ? (
-                <label className="space-y-2 text-sm text-[var(--color-fg-default)]">
+                <label className="flex flex-col gap-2 text-sm text-[var(--color-fg-default)]">
                   <span className="font-medium">Organization URL</span>
                   <input
                     className={INPUT_CLASS}
@@ -194,45 +224,49 @@ function AddConnectionModal({
                   />
                 </label>
               ) : (
-                <div className="rounded-2xl border border-[var(--color-border-default)] bg-white px-4 py-3 text-sm text-[var(--color-fg-muted)]">
-                  Trooper will read the GitHub account name and scopes from the
-                  PAT automatically.
+                <div className="flex items-center rounded-2xl border border-[var(--color-border-default)] bg-white px-4 py-3.5 text-sm text-[var(--color-fg-muted)]">
+                  Trooper will read the GitHub account name and scopes from the PAT automatically.
                 </div>
               )}
             </div>
 
-            <label className="space-y-2 text-sm text-[var(--color-fg-default)]">
-              <span className="font-medium">Personal access token</span>
-              <input
-                type="password"
-                className={INPUT_CLASS}
-                value={draft.token}
-                onChange={(event) =>
-                  onDraftChange({ ...draft, token: event.target.value })
-                }
-                placeholder={draft.provider === GitProvider.GitHub ? "github_pat_..." : "Azure DevOps PAT"}
-              />
-            </label>
+            {/* PAT field */}
+            <div className="mt-6">
+              <label className="flex flex-col gap-2 text-sm text-[var(--color-fg-default)]">
+                <span className="font-medium">Personal access token</span>
+                <input
+                  type="password"
+                  className={INPUT_CLASS}
+                  value={draft.token}
+                  onChange={(event) =>
+                    onDraftChange({ ...draft, token: event.target.value })
+                  }
+                  placeholder={draft.provider === GitProvider.GitHub ? "github_pat_..." : "Azure DevOps PAT"}
+                />
+              </label>
+            </div>
 
-            <label className="flex items-center gap-3 rounded-2xl border border-[var(--color-border-default)] bg-white px-4 py-3 text-sm text-[var(--color-fg-default)]">
+            {/* Default connection toggle */}
+            <label className="mt-6 flex cursor-pointer items-center gap-3 rounded-2xl border border-[var(--color-border-default)] bg-white px-5 py-4 text-sm text-[var(--color-fg-default)]">
               <input
                 type="checkbox"
                 checked={draft.isDefault}
                 onChange={(event) =>
                   onDraftChange({ ...draft, isDefault: event.target.checked })
                 }
-                className="h-4 w-4 rounded border-[var(--color-border-default)]"
+                className="h-4 w-4 accent-[var(--color-accent-fg)] rounded"
               />
-              Use this as the default {providerName(draft.provider)} PAT
+              <span>Use this as the default {providerName(draft.provider)} PAT</span>
             </label>
 
             {error && (
-              <div className="rounded-2xl border border-[var(--color-danger-fg)] bg-[var(--color-danger-subtle)] px-4 py-3 text-sm text-[var(--color-danger-emphasis)]">
+              <div className="mt-6 rounded-2xl border border-[var(--color-danger-fg)] bg-[var(--color-danger-subtle)] px-4 py-3 text-sm text-[var(--color-danger-emphasis)]">
                 {error}
               </div>
             )}
 
-            <div className="flex items-center justify-end gap-3">
+            {/* Footer actions */}
+            <div className="mt-8 flex items-center justify-end gap-3 border-t border-[var(--color-border-subtle)] pt-6">
               <Button variant="ghost" onClick={onClose} disabled={isSaving}>
                 Cancel
               </Button>
@@ -248,151 +282,114 @@ function AddConnectionModal({
   );
 }
 
-function ConnectionCard({
+// Single compact row for a connection
+function ConnectionRow({
   connection,
   linkedRepos,
   onMakeDefault,
   onDelete,
+  onRotateToken,
   pendingActionId,
 }: {
   connection: Connection;
   linkedRepos: LinkedRepository[];
   onMakeDefault: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onRotateToken: (connection: Connection) => void;
   pendingActionId: string | null;
 }) {
   const status = statusConfig(connection.status);
   const StatusIcon = status.icon;
   const days = daysUntil(connection.expiresAt);
   const isBusy = pendingActionId === connection.id;
+  const repoCount = connection.repositoryCount ?? linkedRepos.length;
+  const visibleScopes = (connection.scopes ?? []).slice(0, 3);
+  const hiddenScopeCount = Math.max((connection.scopes?.length ?? 0) - visibleScopes.length, 0);
 
   return (
-    <Card className="overflow-hidden rounded-2xl border-[var(--color-border-default)] bg-[linear-gradient(180deg,_rgba(255,255,255,0.9),_rgba(240,243,247,0.92))] shadow-[0_12px_36px_rgba(15,23,42,0.07)]">
-      <CardContent className="space-y-4 p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
-              {providerIcon(connection.provider)}
-            </div>
+    <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border-subtle)] px-4 py-3 last:border-0">
+      {/* Provider icon */}
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
+        {providerIcon(connection.provider)}
+      </span>
 
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-base font-semibold text-[var(--color-fg-default)]">
-                  {connection.name}
-                </h3>
-                {connection.isDefault && (
-                  <Badge variant="info" className="gap-1">
-                    <Star className="h-3 w-3" />
-                    Default
-                  </Badge>
-                )}
-                <Badge variant={status.variant} className="gap-1">
-                  <StatusIcon className="h-3 w-3" />
-                  {status.label}
-                </Badge>
-              </div>
-
-              <p className="text-sm text-[var(--color-fg-muted)]">
-                {providerName(connection.provider)} &middot; {connection.providerAccountName}
-              </p>
-
-              <div className="flex flex-wrap gap-2 text-xs text-[var(--color-fg-subtle)]">
-                <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1">
-                  <KeyRound className="h-3.5 w-3.5" />
-                  {connection.tokenPreview ?? "PAT stored"}
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1">
-                  <Link2 className="h-3.5 w-3.5" />
-                  {connection.repositoryCount ?? linkedRepos.length} linked repos
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  {connection.authMethod === ConnectionAuthMethod.PAT ? "PAT" : connection.authMethod}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {!connection.isDefault && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onMakeDefault(connection.id)}
-                disabled={isBusy}
-              >
-                {isBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Star className="h-4 w-4" />}
-                Make default
-              </Button>
-            )}
-
-            <a
-              href={connection.providerUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-8 items-center gap-2 rounded-md border border-[var(--color-border-default)] bg-white px-3 text-xs font-medium text-[var(--color-fg-default)] transition hover:bg-[var(--color-canvas-subtle)]"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open
-            </a>
-
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onDelete(connection.id)}
-              disabled={isBusy}
-            >
-              <Trash2 className="h-4 w-4" />
-              Remove
-            </Button>
-          </div>
+      {/* Name + account */}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-[var(--color-fg-default)]">{connection.name}</span>
+          {connection.isDefault && (
+            <Badge variant="info" className="gap-1 text-[10px]">
+              <Star className="h-2.5 w-2.5" /> Default
+            </Badge>
+          )}
+          <Badge variant={status.variant} className="gap-1 text-[10px]">
+            <StatusIcon className="h-2.5 w-2.5" /> {status.label}
+          </Badge>
         </div>
-
-        {connection.scopes.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {connection.scopes.map((scope) => (
-              <span
+        <p className="mt-0.5 text-xs text-[var(--color-fg-subtle)]">
+          {connection.providerAccountName}
+          {connection.tokenPreview && (
+            <span className="ml-2 font-mono">{connection.tokenPreview}</span>
+          )}
+          {repoCount > 0 && (
+            <span className="ml-2 inline-flex items-center gap-1">
+              <Link2 className="h-3 w-3" />
+              {repoCount} {repoCount === 1 ? "repo" : "repos"}
+            </span>
+          )}
+        </p>
+        {connection.scopes && connection.scopes.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {visibleScopes.map((scope) => (
+              <Badge
                 key={scope}
-                className="rounded-full border border-[var(--color-border-subtle)] bg-white px-2.5 py-1 text-[11px] font-mono text-[var(--color-fg-subtle)]"
+                variant={scopeVariant(scope)}
+                className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                title={scope}
               >
-                {scope}
-              </span>
+                {formatScopeLabel(connection.provider, scope)}
+              </Badge>
             ))}
+            {hiddenScopeCount > 0 && (
+              <span className="text-[10px] text-[var(--color-fg-muted)]">+{hiddenScopeCount} more</span>
+            )}
           </div>
         )}
-
-        {linkedRepos.length > 0 && (
-          <div className="rounded-2xl border border-[var(--color-border-subtle)] bg-white/80 px-4 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-fg-subtle)]">
-              Linked repositories
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {linkedRepos.slice(0, 5).map((repo) => (
-                <span
-                  key={repo.id}
-                  className="rounded-full bg-[var(--color-canvas-subtle)] px-2.5 py-1 text-xs text-[var(--color-fg-muted)]"
-                >
-                  {repo.fullName}
-                </span>
-              ))}
-              {linkedRepos.length > 5 && (
-                <span className="rounded-full bg-[var(--color-canvas-subtle)] px-2.5 py-1 text-xs text-[var(--color-fg-muted)]">
-                  +{linkedRepos.length - 5} more
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
         {days !== null && days <= 30 && (
-          <div className="rounded-2xl border border-[var(--color-warning-fg)] bg-[var(--color-warning-subtle)] px-4 py-3 text-sm text-[var(--color-warning-emphasis)]">
-            {days <= 0
-              ? "This token is expired and should be rotated."
-              : `This token expires in ${days} day${days === 1 ? "" : "s"}.`}
-          </div>
+          <p className="mt-0.5 text-xs text-[var(--color-warning-fg)]">
+            {days <= 0 ? "Token expired — rotate now" : `Expires in ${days}d`}
+          </p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      {/* Actions */}
+      <div className="flex shrink-0 items-center gap-1">
+        <Button size="sm" variant="ghost" onClick={() => onRotateToken(connection)} disabled={isBusy} title="Rotate token">
+          <KeyRound className="h-3.5 w-3.5" />
+          <span className="sr-only">Rotate token</span>
+        </Button>
+        {!connection.isDefault && (
+          <Button size="sm" variant="ghost" onClick={() => onMakeDefault(connection.id)} disabled={isBusy}>
+            {isBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Star className="h-3.5 w-3.5" />}
+            <span className="sr-only">Make default</span>
+          </Button>
+        )}
+        {connection.providerUrl && (
+          <a
+            href={connection.providerUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-fg-muted)] transition hover:bg-[var(--color-canvas-subtle)] hover:text-[var(--color-fg-default)]"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => onDelete(connection.id)} disabled={isBusy}>
+          <Trash2 className="h-3.5 w-3.5" />
+          <span className="sr-only">Remove</span>
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -405,6 +402,10 @@ export default function ConnectionsPage() {
   const [composerError, setComposerError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [rotatingConnection, setRotatingConnection] = useState<Connection | null>(null);
+  const [rotateToken, setRotateToken] = useState("");
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [isRotating, setIsRotating] = useState(false);
 
   const refresh = async () => {
     const [connectionData, repositoryData] = await Promise.all([
@@ -431,19 +432,6 @@ export default function ConnectionsPage() {
       items: connections.filter((connection) => connection.provider === provider),
     }));
   }, [connections]);
-
-  const stats = useMemo(() => {
-    const defaults = connections.filter((connection) => connection.isDefault).length;
-    const githubRepos = repositories.filter((repo) => repo.provider === GitProvider.GitHub).length;
-    const azureRepos = repositories.filter((repo) => repo.provider === GitProvider.AzureRepos).length;
-
-    return [
-      { label: "Saved PATs", value: connections.length, icon: KeyRound },
-      { label: "Default connections", value: defaults, icon: Star },
-      { label: "GitHub repos linked", value: githubRepos, icon: Link2 },
-      { label: "Azure repos linked", value: azureRepos, icon: ServerCog },
-    ];
-  }, [connections, repositories]);
 
   const openComposer = () => {
     setComposerError(null);
@@ -495,6 +483,22 @@ export default function ConnectionsPage() {
     }
   };
 
+  const handleRotateToken = async () => {
+    if (!rotatingConnection || !rotateToken.trim()) return;
+    setIsRotating(true);
+    setRotateError(null);
+    try {
+      await connectionsApi.update(rotatingConnection.id, { token: rotateToken.trim() });
+      await refresh();
+      setRotatingConnection(null);
+      setRotateToken("");
+    } catch (error) {
+      setRotateError(error instanceof Error ? error.message : "Failed to update token.");
+    } finally {
+      setIsRotating(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!window.confirm("Remove this connection? Trooper will stop using its PAT immediately.")) {
       return;
@@ -511,113 +515,70 @@ export default function ConnectionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-        <Card className="rounded-2xl border-[var(--color-border-default)] bg-[linear-gradient(135deg,_rgba(0,120,212,0.12),_rgba(255,255,255,0.92)_45%,_rgba(240,243,247,0.96))] shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-          <CardContent className="space-y-4 p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="max-w-xl space-y-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--color-accent-emphasis)]">
-                  Connection Control
-                </p>
-                <h2 className="text-2xl font-semibold text-[var(--color-fg-default)]">
-                  PATs live here now
-                </h2>
-                <p className="text-sm leading-6 text-[var(--color-fg-muted)]">
-                  Add multiple GitHub and Azure DevOps PATs, pick a default per
-                  provider, and let linked repositories inherit the right
-                  credentials.
-                </p>
-              </div>
-
-              <Button className="gap-2" onClick={openComposer}>
-                <Plus className="h-4 w-4" />
-                Add connection
-              </Button>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {stats.map((stat) => (
-                <div
-                  key={stat.label}
-                  className="rounded-2xl border border-[var(--color-border-subtle)] bg-white/85 px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.05)]"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-[var(--color-fg-muted)]">
-                      {stat.label}
-                    </span>
-                    <stat.icon className="h-4 w-4 text-[var(--color-accent-emphasis)]" />
-                  </div>
-                  <p className="mt-3 text-2xl font-semibold text-[var(--color-fg-default)]">
-                    {stat.value}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-2xl border-[var(--color-border-default)] bg-[linear-gradient(180deg,_rgba(255,255,255,0.95),_rgba(240,243,247,0.98))] shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
-          <CardContent className="space-y-3 p-6">
-            <div className="flex items-center gap-3 text-[var(--color-fg-default)]">
-              <ShieldCheck className="h-5 w-5 text-[var(--color-accent-emphasis)]" />
-              <h3 className="text-base font-semibold">Useful rules</h3>
-            </div>
-            <div className="space-y-3 text-sm text-[var(--color-fg-muted)]">
-              <p>GitHub only needs a name and PAT. Trooper inspects the PAT and fills in the account automatically.</p>
-              <p>Azure DevOps PATs need an organization URL so linked repos know which org to use.</p>
-              <p>Linked repositories use their assigned connection first. If they do not have one, Trooper falls back to the default PAT for that provider.</p>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-[var(--color-fg-default)]">Connections</h2>
+          <p className="mt-0.5 text-sm text-[var(--color-fg-subtle)]">
+            Manage provider PATs used by Trooper
+          </p>
+        </div>
+        <Button className="gap-2" onClick={openComposer}>
+          <Plus className="h-4 w-4" />
+          Add connection
+        </Button>
       </div>
 
+      {/* Error banner */}
       {composerError && !isComposerOpen && (
-        <div className="rounded-2xl border border-[var(--color-danger-fg)] bg-[var(--color-danger-subtle)] px-4 py-3 text-sm text-[var(--color-danger-emphasis)]">
+        <p className="rounded-lg border border-[var(--color-danger-fg)] bg-[var(--color-danger-subtle)] px-4 py-3 text-sm text-[var(--color-danger-emphasis)]">
           {composerError}
-        </div>
+        </p>
       )}
 
+      {/* Provider sections */}
       {isLoading ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div key={index} className="trooper-shimmer h-56 rounded-2xl" />
+        <div className="space-y-2">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="trooper-shimmer h-12 rounded-lg" />
           ))}
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {groupedConnections.map(({ provider, items }) => (
-            <section key={provider} className="space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-semibold text-[var(--color-fg-default)]">
-                    {providerName(provider)}
-                  </h3>
-                  <p className="text-sm text-[var(--color-fg-muted)]">
-                    {items.length > 0
-                      ? `${items.length} saved connection${items.length === 1 ? "" : "s"}`
-                      : `No ${providerName(provider)} PATs saved yet.`}
-                  </p>
-                </div>
+            <section key={provider} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--color-fg-subtle)]">
+                  {providerIcon(provider)}
+                </span>
+                <h3 className="text-sm font-semibold text-[var(--color-fg-default)]">
+                  {providerName(provider)}
+                </h3>
+                {items.length > 0 && (
+                  <span className="rounded-full bg-[var(--color-canvas-subtle)] px-2 py-0.5 text-xs text-[var(--color-fg-muted)]">
+                    {items.length}
+                  </span>
+                )}
               </div>
-
-              {items.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-[var(--color-border-default)] bg-white/70 px-5 py-6 text-sm text-[var(--color-fg-muted)]">
-                  Add a {providerName(provider)} PAT so Trooper can work against external repositories on this provider.
-                </div>
-              ) : (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {items.map((connection) => (
-                    <ConnectionCard
+              <div className="overflow-hidden rounded-lg border border-[var(--color-border-default)] bg-white">
+                {items.length === 0 ? (
+                  <p className="px-4 py-4 text-sm text-[var(--color-fg-subtle)]">
+                    No {providerName(provider)} PATs saved yet.
+                  </p>
+                ) : (
+                  items.map((connection) => (
+                    <ConnectionRow
                       key={connection.id}
                       connection={connection}
-                      linkedRepos={repositories.filter((repo) => repo.connectionId === connection.id)}
+                      linkedRepos={repositories.filter((r) => r.connectionId === connection.id)}
                       onMakeDefault={handleMakeDefault}
                       onDelete={handleDelete}
+                      onRotateToken={(c) => { setRotatingConnection(c); setRotateToken(""); setRotateError(null); }}
                       pendingActionId={pendingActionId}
                     />
-                  ))}
-                </div>
-              )}
+                  ))
+                )}
+              </div>
             </section>
           ))}
         </div>
@@ -632,6 +593,70 @@ export default function ConnectionsPage() {
           error={composerError}
           isSaving={isSaving}
         />
+      )}
+
+      {rotatingConnection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.28)] px-4 py-8 backdrop-blur-[2px]">
+          <div className="w-full max-w-lg rounded-2xl border border-[var(--color-border-default)] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
+            <div className="flex items-start justify-between border-b border-[var(--color-border-subtle)] px-5 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-[var(--color-fg-default)]">
+                  Rotate Token
+                </h2>
+                <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">
+                  Update the PAT for <span className="font-medium">{rotatingConnection.name}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRotatingConnection(null)}
+                className="rounded-lg border border-[var(--color-border-default)] bg-white p-1.5 text-[var(--color-fg-subtle)] transition hover:text-[var(--color-fg-default)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)]">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[var(--color-accent-subtle)] text-[var(--color-accent-emphasis)]">
+                  {providerIcon(rotatingConnection.provider)}
+                </span>
+                <span>{rotatingConnection.providerAccountName}</span>
+                {rotatingConnection.tokenPreview && (
+                  <span className="font-mono">Current: {rotatingConnection.tokenPreview}</span>
+                )}
+              </div>
+
+              <label className="space-y-1.5 text-sm text-[var(--color-fg-default)]">
+                <span className="font-medium">New personal access token</span>
+                <input
+                  type="password"
+                  className={INPUT_CLASS}
+                  value={rotateToken}
+                  onChange={(e) => setRotateToken(e.target.value)}
+                  placeholder={rotatingConnection.provider === GitProvider.GitHub ? "github_pat_..." : "Azure DevOps PAT"}
+                  autoFocus
+                />
+              </label>
+
+              {rotateError && (
+                <div className="rounded-lg border border-[var(--color-danger-fg)] bg-[var(--color-danger-subtle)] px-3 py-2 text-sm text-[var(--color-danger-emphasis)]">
+                  {rotateError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-1">
+                <Button variant="ghost" onClick={() => setRotatingConnection(null)} disabled={isRotating}>
+                  Cancel
+                </Button>
+                <Button onClick={handleRotateToken} disabled={isRotating || !rotateToken.trim()}>
+                  {isRotating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                  Update token
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

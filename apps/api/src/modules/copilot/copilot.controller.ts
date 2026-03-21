@@ -1,8 +1,21 @@
 import { Controller, Post, Get, Body, UsePipes, Logger } from '@nestjs/common';
 import { CopilotService } from './copilot.service';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
-import { CopilotQuerySchema, CopilotAskSchema } from '@trooper/shared';
-import type { CopilotQuery, CopilotCardResponse, CopilotModelOption } from '@trooper/shared';
+import {
+  CopilotQuerySchema,
+  CopilotAskSchema,
+  SkillDraftSchema,
+  SkillRunSchema,
+} from '@trooper/shared';
+import type {
+  CopilotQuery,
+  CopilotCardResponse,
+  CopilotModelOption,
+  SkillDraftRequest,
+  SkillDraftResponse,
+  SkillRunRequest,
+  SkillRunResponse,
+} from '@trooper/shared';
 
 @Controller('copilot')
 export class CopilotController {
@@ -11,7 +24,7 @@ export class CopilotController {
   constructor(private readonly copilot: CopilotService) {}
 
   @Get('models')
-  async models(): Promise<CopilotModelOption[]> {
+  models(): CopilotModelOption[] {
     return this.copilot.listModels();
   }
 
@@ -22,7 +35,9 @@ export class CopilotController {
   @Post('summarize')
   @UsePipes(new ZodValidationPipe(CopilotQuerySchema))
   async summarize(@Body() dto: CopilotQuery): Promise<CopilotCardResponse> {
-    this.logger.log(`Copilot summarize: ${dto.type} #${dto.refNumber} in ${dto.repositoryFullName}`);
+    this.logger.log(
+      `Copilot summarize: ${dto.type} #${dto.refNumber} in ${dto.repositoryFullName}`,
+    );
     return this.copilot.summarize(dto);
   }
 
@@ -33,7 +48,9 @@ export class CopilotController {
   @Post('ground')
   @UsePipes(new ZodValidationPipe(CopilotQuerySchema))
   async ground(@Body() dto: CopilotQuery): Promise<CopilotCardResponse> {
-    this.logger.log(`Copilot ground: ${dto.type} #${dto.refNumber} in ${dto.repositoryFullName}`);
+    this.logger.log(
+      `Copilot ground: ${dto.type} #${dto.refNumber} in ${dto.repositoryFullName}`,
+    );
     return this.copilot.ground(dto, dto.branch ?? 'main');
   }
 
@@ -46,7 +63,29 @@ export class CopilotController {
   async ask(
     @Body() dto: CopilotQuery & { question: string; priorSummary: string },
   ): Promise<{ answerMarkdown: string }> {
-    this.logger.log(`Copilot ask: ${dto.type} #${dto.refNumber} — "${dto.question.slice(0, 60)}"`);
+    this.logger.log(
+      `Copilot ask: ${dto.type} #${dto.refNumber} — "${dto.question.slice(0, 60)}"`,
+    );
     return this.copilot.ask(dto, dto.question, dto.priorSummary);
+  }
+
+  @Post('draft-skill')
+  @UsePipes(new ZodValidationPipe(SkillDraftSchema))
+  async draftSkill(
+    @Body() dto: SkillDraftRequest,
+  ): Promise<SkillDraftResponse> {
+    this.logger.log(
+      `Copilot skill draft: mode=${dto.draftMode ?? 'new'} model=${dto.modelId ?? 'default'}`,
+    );
+    return this.copilot.draftSkill(dto);
+  }
+
+  @Post('run-skill')
+  @UsePipes(new ZodValidationPipe(SkillRunSchema))
+  async runSkill(@Body() dto: SkillRunRequest): Promise<SkillRunResponse> {
+    this.logger.log(
+      `Copilot run skill: ${dto.skillName} on ${dto.repositoryFullName}@${dto.branch}`,
+    );
+    return this.copilot.runSkill(dto);
   }
 }

@@ -74,10 +74,10 @@ export default function MaskingPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-sm font-medium text-[var(--color-fg-default)]">
-            Masking Rules
+            Security
           </h2>
           <p className="text-xs text-[var(--color-fg-muted)]">
-            Patterns that Trooper redacts before sending code to the LLM
+            Control the patterns Trooper redacts before repository context is sent to an LLM.
           </p>
         </div>
         <Button size="sm" variant="default" className="gap-2">
@@ -86,38 +86,23 @@ export default function MaskingPage() {
         </Button>
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-3 py-2 text-center">
-          <p className="text-lg font-semibold text-[var(--color-fg-default)]">
-            {rules.length}
-          </p>
-          <p className="text-[11px] text-[var(--color-fg-muted)]">Total Rules</p>
-        </div>
-        <div className="rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-3 py-2 text-center">
-          <p className="text-lg font-semibold text-[var(--color-accent-fg)]">
-            {enabledCount}
-          </p>
-          <p className="text-[11px] text-[var(--color-fg-muted)]">Enabled</p>
-        </div>
-        <div className="rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-3 py-2 text-center">
-          <p className="text-lg font-semibold text-[var(--color-info-fg)]">
-            {custom.length}
-          </p>
-          <p className="text-[11px] text-[var(--color-fg-muted)]">Custom</p>
-        </div>
+      <div className="flex flex-wrap gap-2">
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {enabledCount} enabled
+        </span>
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {builtIn.length} built-in
+        </span>
+        <span className="rounded-full border border-[var(--color-border-subtle)] bg-white px-3 py-1.5 text-xs text-[var(--color-fg-muted)]">
+          {custom.length} custom
+        </span>
       </div>
 
-      {/* Info */}
       <div className="rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-inset)] px-4 py-3">
         <div className="flex items-start gap-2">
           <Shield className="h-4 w-4 mt-0.5 text-[var(--color-accent-fg)]" />
           <p className="text-xs text-[var(--color-fg-muted)]">
-            Masking rules run automatically during every agent run. Source code
-            is scanned for matching patterns and sensitive values are replaced
-            with <code className="text-[var(--color-fg-default)]">[REDACTED]</code>{" "}
-            placeholders before being sent to the LLM. After code generation,
-            original values are restored in the output.
+            Security rules run automatically during every agent run. Matching secrets are replaced with <code className="text-[var(--color-fg-default)]">[REDACTED]</code> before context leaves Trooper, then restored after generation.
           </p>
         </div>
       </div>

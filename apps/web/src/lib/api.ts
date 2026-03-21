@@ -16,9 +16,31 @@ import type {
   CopilotGroundingTrace,
   CopilotModelOption,
   CopilotQuery,
+  SkillDraftRequest,
+  SkillDraftResponse,
+  SkillRunRequest,
+  SkillRunResponse,
 } from '@trooper/shared';
 
 export type { CopilotCardResponse, CopilotGroundingTrace, CopilotModelOption, CopilotQuery };
+export type { SkillDraftRequest, SkillDraftResponse, SkillRunRequest, SkillRunResponse };
+
+export interface UnifiedTask {
+  type: 'work-item' | 'run';
+  id: string;
+  title: string;
+  status: string;
+  source: string;
+  repository: string | null;
+  lastActivity: string;
+  summary: string | null;
+  branchName: string | null;
+  latestSignal: string | null;
+  latestSignalAt: string | null;
+  workItemNumber: number | null;
+  linkedRun: { id: string; status: string } | null;
+  linkedPR: { number: number | null; status: string; url: string } | null;
+}
 
 export interface IndexingSyncJob {
   id: string;
@@ -36,7 +58,18 @@ export interface IndexingSyncJob {
   finishedAt?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api';
+function resolveApiBase() {
+  if (process.env.NEXT_PUBLIC_API_URL?.trim()) {
+    return process.env.NEXT_PUBLIC_API_URL.trim();
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:3001/api`;
+  }
+
+  return 'http://localhost:3001/api';
+}
 
 const GET_RETRY_DELAYS_MS = [250, 750, 1500] as const;
 
@@ -53,7 +86,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   for (let attempt = 0; attempt <= GET_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      const res = await fetch(`${API_BASE}${path}`, {
+      const res = await fetch(`${resolveApiBase()}${path}`, {
         ...init,
         headers: { 'Content-Type': 'application/json', ...init?.headers },
       });
@@ -82,6 +115,8 @@ export { ApiError };
 // ─── Dashboard ─────────────────────────────────────
 export const dashboard = {
   getOverview: () => request<SystemHealth>('/dashboard'),
+  tasks: (status?: string) =>
+    request<UnifiedTask[]>(status ? `/dashboard/tasks?status=${encodeURIComponent(status)}` : '/dashboard/tasks'),
 };
 
 // ─── Connections ───────────────────────────────────
@@ -180,11 +215,18 @@ export const indexing = {
 
 // ─── Pipeline ──────────────────────────────────────
 export const pipeline = {
-  repos: (q?: string, page?: number) => request<Array<{ fullName: string; private: boolean; defaultBranch: string; indexed: boolean; indexStatus: string | null; lastSyncAt: string | null; indexedFiles: number; description?: string; language?: string; stars?: number; openIssuesCount?: number; ownerAvatarUrl?: string; provider: string }>>(`/pipeline/repos${q ? `?q=${encodeURIComponent(q)}${page ? `&page=${page}` : ''}` : ''}`),
+  repos: (q?: string, page?: number, provider?: string) => {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (page) params.set('page', String(page));
+    if (provider) params.set('provider', provider);
+    const qs = params.toString();
+    return request<Array<{ fullName: string; private: boolean; defaultBranch: string; indexed: boolean; indexStatus: string | null; lastSyncAt: string | null; indexedFiles: number; description?: string; language?: string; stars?: number; openIssuesCount?: number; ownerAvatarUrl?: string; provider: string }>>(`/pipeline/repos${qs ? `?${qs}` : ''}`);
+  },
 
-  getRepo: (repoFullName: string) => request<{ fullName: string; private: boolean; defaultBranch: string; indexed: boolean; indexStatus: string | null; lastSyncAt: string | null; indexedFiles: number; description?: string; language?: string; stars?: number; openIssuesCount?: number; ownerAvatarUrl?: string; provider: string }>(`/pipeline/repos/${repoFullName}`),
+  getRepo: (repoFullName: string, provider?: string) => request<{ fullName: string; private: boolean; defaultBranch: string; indexed: boolean; indexStatus: string | null; lastSyncAt: string | null; indexedFiles: number; description?: string; language?: string; stars?: number; openIssuesCount?: number; ownerAvatarUrl?: string; provider: string }>(`/pipeline/repos/${repoFullName}${provider ? `?provider=${provider}` : ''}`),
 
-  listBranches: (repoFullName: string) => request<string[]>(`/pipeline/repos/${repoFullName}/branches`),
+  listBranches: (repoFullName: string, provider?: string) => request<string[]>(`/pipeline/repos/${repoFullName}/branches${provider ? `?provider=${provider}` : ''}`),
   trigger: (data: { workItemId?: string; repositoryFullName?: string; userQuery?: string; targetBranch?: string }) =>
     request<{ runId: string; status: string; prUrl?: string; error?: string }>('/pipeline/trigger', { method: 'POST', body: JSON.stringify(data) }),
   approvePlan: (runId: string) =>
@@ -202,50 +244,52 @@ export const pipeline = {
     request<{ runId: string; status: string; error?: string }>(`/pipeline/runs/${runId}/submit`, { method: 'POST' }),
   getRun: (runId: string) => request<any>(`/pipeline/runs/${runId}`),
   getSteps: (runId: string) => request<any[]>(`/pipeline/runs/${runId}/steps`),
-  streamUrl: (runId: string) => `${API_BASE}/pipeline/runs/${runId}/stream`,
+  streamUrl: (runId: string) => `${resolveApiBase()}/pipeline/runs/${runId}/stream`,
   // Issues
-  listIssues: (repoFullName: string, opts?: { state?: string; page?: number; perPage?: number; q?: string }) => {
+  listIssues: (repoFullName: string, opts?: { state?: string; page?: number; perPage?: number; q?: string; provider?: string }) => {
     const params = new URLSearchParams();
     if (opts?.state) params.set('state', opts.state);
     if (opts?.page) params.set('page', String(opts.page));
     if (opts?.perPage) params.set('per_page', String(opts.perPage));
     if (opts?.q) params.set('q', opts.q);
+    if (opts?.provider) params.set('provider', opts.provider);
     const qs = params.toString();
-    return request<{ items: any[]; totalCount: number }>(`/pipeline/repos/${repoFullName}/issues${qs ? `?${qs}` : ''}`);
+    return request<{ items: any[]; totalCount: number; availability?: { status: 'ok' | 'limited'; reason?: string } }>(`/pipeline/repos/${repoFullName}/issues${qs ? `?${qs}` : ''}`);
   },
-  getIssue: (repoFullName: string, issueNumber: number) => request<any>(`/pipeline/repos/${repoFullName}/issues/${issueNumber}`),
-  postIssueComment: (repoFullName: string, issueNumber: number, body: string) =>
-    request<any>(`/pipeline/repos/${repoFullName}/issues/${issueNumber}/comments`, { method: 'POST', body: JSON.stringify({ body }) }),
+  getIssue: (repoFullName: string, issueNumber: number, provider?: string) => request<any>(`/pipeline/repos/${repoFullName}/issues/${issueNumber}${provider ? `?provider=${provider}` : ''}`),
+  postIssueComment: (repoFullName: string, issueNumber: number, body: string, provider?: string) =>
+    request<any>(`/pipeline/repos/${repoFullName}/issues/${issueNumber}/comments${provider ? `?provider=${provider}` : ''}`, { method: 'POST', body: JSON.stringify({ body }) }),
   // Pull Requests
-  listPulls: (repoFullName: string, opts?: { state?: string; page?: number; perPage?: number; sort?: string }) => {
+  listPulls: (repoFullName: string, opts?: { state?: string; page?: number; perPage?: number; sort?: string; provider?: string }) => {
     const params = new URLSearchParams();
     if (opts?.state) params.set('state', opts.state);
     if (opts?.page) params.set('page', String(opts.page));
     if (opts?.perPage) params.set('per_page', String(opts.perPage));
     if (opts?.sort) params.set('sort', opts.sort);
+    if (opts?.provider) params.set('provider', opts.provider);
     const qs = params.toString();
     return request<{ items: any[]; totalCount: number }>(`/pipeline/repos/${repoFullName}/pulls${qs ? `?${qs}` : ''}`);
   },
-  getPull: (repoFullName: string, prNumber: number) =>
-    request<any>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}`),
-  postPRComment: (repoFullName: string, prNumber: number, body: string) =>
-    request<any>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/comments`, { method: 'POST', body: JSON.stringify({ body }) }),
-  mergePR: (repoFullName: string, prNumber: number, mergeMethod?: 'merge' | 'squash' | 'rebase') =>
-    request<void>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/merge`, { method: 'POST', body: JSON.stringify({ merge_method: mergeMethod }) }),
-  closePR: (repoFullName: string, prNumber: number) =>
-    request<void>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/close`, { method: 'POST' }),
+  getPull: (repoFullName: string, prNumber: number, provider?: string) =>
+    request<any>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}${provider ? `?provider=${provider}` : ''}`),
+  postPRComment: (repoFullName: string, prNumber: number, body: string, provider?: string) =>
+    request<any>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/comments${provider ? `?provider=${provider}` : ''}`, { method: 'POST', body: JSON.stringify({ body }) }),
+  mergePR: (repoFullName: string, prNumber: number, mergeMethod?: 'merge' | 'squash' | 'rebase', provider?: string) =>
+    request<void>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/merge${provider ? `?provider=${provider}` : ''}`, { method: 'POST', body: JSON.stringify({ merge_method: mergeMethod }) }),
+  closePR: (repoFullName: string, prNumber: number, provider?: string) =>
+    request<void>(`/pipeline/repos/${repoFullName}/pulls/${prNumber}/close${provider ? `?provider=${provider}` : ''}`, { method: 'POST' }),
   // Enrichment
-  getRepoActivity: (repoFullName: string) =>
-    request<{ openIssues: number; openPRs: number }>(`/pipeline/repos/${repoFullName}/activity`),
-  getRepoLanguages: (repoFullName: string) =>
-    request<Record<string, number>>(`/pipeline/repos/${repoFullName}/languages`),
+  getRepoActivity: (repoFullName: string, provider?: string) =>
+    request<{ openIssues: number; openPRs: number }>(`/pipeline/repos/${repoFullName}/activity${provider ? `?provider=${provider}` : ''}`),
+  getRepoLanguages: (repoFullName: string, provider?: string) =>
+    request<Record<string, number>>(`/pipeline/repos/${repoFullName}/languages${provider ? `?provider=${provider}` : ''}`),
   // Security
-  getSecuritySummary: (repoFullName: string) =>
+  getSecuritySummary: (repoFullName: string, provider?: string) =>
     request<{ totalAlerts: number; critical: number; high: number; medium: number; low: number; alerts: any[] }>(
-      `/pipeline/repos/${repoFullName}/security`,
+      `/pipeline/repos/${repoFullName}/security${provider ? `?provider=${provider}` : ''}`,
     ),
-  getSecurityAlert: (repoFullName: string, alertType: string, alertId: number) =>
-    request<any>(`/pipeline/repos/${repoFullName}/security/${alertType}/${alertId}`),
+  getSecurityAlert: (repoFullName: string, alertType: string, alertId: number, provider?: string) =>
+    request<any>(`/pipeline/repos/${repoFullName}/security/${alertType}/${alertId}${provider ? `?provider=${provider}` : ''}`),
   // Auto-Draft
   draft: (context: { type: string; repositoryFullName: string; refNumber?: number; title?: string; body?: string; alertType?: string; severity?: string; affectedComponent?: string; targetBranch?: string }) =>
     request<{ runId: string; status: string }>('/pipeline/draft', { method: 'POST', body: JSON.stringify(context) }),
@@ -267,6 +311,16 @@ export const pipeline = {
 // ─── Copilot ───────────────────────────────────────
 export const copilot = {
   models: () => request<CopilotModelOption[]>('/copilot/models'),
+  draftSkill: (data: SkillDraftRequest) =>
+    request<SkillDraftResponse>('/copilot/draft-skill', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  runSkill: (data: SkillRunRequest) =>
+    request<SkillRunResponse>('/copilot/run-skill', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   summarize: (query: CopilotQuery) =>
     request<CopilotCardResponse>('/copilot/summarize', {
       method: 'POST',

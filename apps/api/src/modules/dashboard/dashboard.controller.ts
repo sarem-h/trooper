@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 
 @Controller('dashboard')
@@ -8,5 +8,10 @@ export class DashboardController {
   @Get()
   getOverview() {
     return this.dashboardService.getOverview();
+  }
+
+  @Get('tasks')
+  getTasks(@Query('status') status?: string) {
+    return this.dashboardService.getTasks(status);
   }
 }

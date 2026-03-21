@@ -25,15 +25,20 @@ import {
   Terminal,
   ScanSearch,
   BrainCircuit,
+  UserCheck,
+  Bot,
+  Webhook,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { copilot, pipeline as pipelineApi } from "@/lib/api";
+import { copilot, pipeline as pipelineApi, repositories as reposApi } from "@/lib/api";
 import type { CopilotCardResponse, CopilotGroundingTrace, CopilotModelOption } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { MarkdownRenderer } from "@/components/ui/markdown";
 import { useCopilotSummary } from "./use-copilot-summary";
+import { IdentityMode } from "@trooper/shared";
+import type { LinkedRepository } from "@trooper/shared";
 
 const REPO_COPILOT_MODEL_STORAGE_KEY = "trooper.repo-copilot.model-id";
 const REPO_COPILOT_STAGE_LIMIT_STORAGE_KEY = "trooper.repo-copilot.ground-stage-limit";
@@ -144,6 +149,11 @@ interface RepoActivity {
   openPRs: number;
 }
 
+interface AvailabilityState {
+  status: "ok" | "limited";
+  reason?: string;
+}
+
 type Tab = "issues" | "pulls" | "security";
 
 const LIST_PAGE_SIZE = 10;
@@ -164,6 +174,24 @@ function timeAgo(iso: string) {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+function decodeRepoSegment(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function providerLabel(value?: string) {
+  if (!value) return "Unknown";
+  if (value === "azure_repos") return "Azure DevOps";
+  if (value === "github") return "GitHub";
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function labelStyle(color: string) {
@@ -888,11 +916,13 @@ function BranchPicker({
   repoFullName,
   activeBranch,
   defaultBranch,
+  provider,
   onSelect,
 }: {
   repoFullName: string;
   activeBranch?: string;
   defaultBranch?: string;
+  provider?: string;
   onSelect: (branch: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -905,14 +935,14 @@ function BranchPicker({
     if (branches || loading) return;
     setLoading(true);
     try {
-      const data = await pipelineApi.listBranches(repoFullName);
+      const data = await pipelineApi.listBranches(repoFullName, provider);
       setBranches(data);
     } catch {
       setBranches(defaultBranch ? [defaultBranch] : []);
     } finally {
       setLoading(false);
     }
-  }, [branches, defaultBranch, loading, repoFullName]);
+  }, [branches, defaultBranch, loading, provider, repoFullName]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1027,7 +1057,7 @@ export default function RepoContextHub() {
   const params = useParams<{ owner: string; repo: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const repoFullName = `${params.owner}/${params.repo}`;
+  const repoFullName = `${decodeRepoSegment(params.owner)}/${decodeRepoSegment(params.repo)}`;
   const branchParam = getRepoHubSearchParam(searchParams, "branch") ?? undefined;
   const tabParam = parseRepoTabParam(getRepoHubSearchParam(searchParams, "tab"));
   const selectedIssueParam = parsePositiveIntParam(getRepoHubSearchParam(searchParams, "issue"));
@@ -1041,12 +1071,15 @@ export default function RepoContextHub() {
   const securitySeverityParam = parseAllowedParam(getRepoHubSearchParam(searchParams, "securitySeverity"), ["all", "critical", "high", "medium", "low"] as const, "all");
   const securityTypeParam = parseAllowedParam(getRepoHubSearchParam(searchParams, "securityType"), ["all", "dependabot", "code_scanning", "secret_scanning"] as const, "all");
   const securityFixOnlyParam = getRepoHubSearchParam(searchParams, "securityFixOnly") === "1";
+  const effectiveUrlTab: Tab = tabParam ?? "issues";
 
   const [tab, setTab] = useState<Tab>("issues");
+  const pendingTabRef = useRef<Tab | null>(null);
   const [drafting, setDrafting] = useState<number | null>(null);
   const [auditing, setAuditing] = useState(false);
   const [repoMeta, setRepoMeta] = useState<RepoSummary | null>(null);
   const [activity, setActivity] = useState<RepoActivity | null>(null);
+  const [linkedRepo, setLinkedRepo] = useState<LinkedRepository | null>(null);
 
   // Issues state (server-side pagination)
   const [issues, setIssues] = useState<ScmIssue[]>([]);
@@ -1054,6 +1087,7 @@ export default function RepoContextHub() {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [issuesLoaded, setIssuesLoaded] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<ScmIssue | null>(null);
+  const [issueAvailability, setIssueAvailability] = useState<AvailabilityState | null>(null);
 
   // PRs state (server-side pagination)
   const [pulls, setPulls] = useState<ScmPR[]>([]);
@@ -1084,28 +1118,41 @@ export default function RepoContextHub() {
   const [securityTypeFilter, setSecurityTypeFilter] = useState<"all" | "dependabot" | "code_scanning" | "secret_scanning">(securityTypeParam);
   const [securityFixOnly, setSecurityFixOnly] = useState(securityFixOnlyParam);
 
+  const providerParam = searchParams?.get("provider") ?? undefined;
+
   const loadRepoMeta = useCallback(async () => {
     try {
-      const data = await pipelineApi.getRepo(repoFullName);
+      const data = await pipelineApi.getRepo(repoFullName, providerParam);
       setRepoMeta(data);
     } catch (err) {
       console.error("Failed to load repo metadata:", err);
     }
-  }, [repoFullName]);
+  }, [repoFullName, providerParam]);
 
   const loadRepoActivity = useCallback(async () => {
     try {
-      const data = await pipelineApi.getRepoActivity(repoFullName);
+      const data = await pipelineApi.getRepoActivity(repoFullName, providerParam);
       setActivity(data);
     } catch (err) {
       console.error("Failed to load repo activity:", err);
+    }
+  }, [providerParam, repoFullName]);
+
+  const loadLinkedRepo = useCallback(async () => {
+    try {
+      const all = await reposApi.list();
+      const match = all.find((r) => r.fullName === repoFullName);
+      setLinkedRepo(match ?? null);
+    } catch {
+      // Not linked — that's fine
     }
   }, [repoFullName]);
 
   useEffect(() => {
     loadRepoMeta();
     loadRepoActivity();
-  }, [loadRepoActivity, loadRepoMeta]);
+    loadLinkedRepo();
+  }, [loadRepoActivity, loadRepoMeta, loadLinkedRepo]);
 
   const defaultBranch = repoMeta?.defaultBranch;
   const activeBranch = branchParam ?? defaultBranch;
@@ -1197,11 +1244,18 @@ export default function RepoContextHub() {
   }, []);
 
   useEffect(() => {
-    const nextTab = tabParam ?? (selectedPullParam ? "pulls" : "issues");
-    if (tab !== nextTab) {
-      setTab(nextTab);
+    if (pendingTabRef.current) {
+      if (effectiveUrlTab === pendingTabRef.current) {
+        pendingTabRef.current = null;
+      } else {
+        return;
+      }
     }
-  }, [selectedPullParam, tab, tabParam]);
+
+    if (tab !== effectiveUrlTab) {
+      setTab(effectiveUrlTab);
+    }
+  }, [effectiveUrlTab, tab]);
 
   useEffect(() => {
     if (issueStateFilter !== issueStateParam) {
@@ -1315,6 +1369,11 @@ export default function RepoContextHub() {
     router.replace(`/repos/${repoFullName}?${nextParams.toString()}`);
   }, [defaultBranch, repoFullName, router, searchParams]);
 
+  const handleTabChange = useCallback((nextTab: Tab) => {
+    pendingTabRef.current = nextTab;
+    setTab(nextTab);
+  }, []);
+
   // Debounce issue search
   useEffect(() => {
     const timer = setTimeout(() => setIssueSearchDebounced(issueSearchInput), 300);
@@ -1329,16 +1388,19 @@ export default function RepoContextHub() {
         page,
         perPage: LIST_PAGE_SIZE,
         q: search || undefined,
+        provider: providerParam,
       });
       setIssues(data.items);
       setIssuesTotalCount(data.totalCount);
+      setIssueAvailability(data.availability ?? { status: "ok" });
       setIssuesLoaded(true);
     } catch (err) {
       console.error("Failed to load issues:", err);
+      setIssueAvailability(null);
     } finally {
       setIssuesLoading(false);
     }
-  }, [repoFullName]);
+  }, [providerParam, repoFullName]);
 
   const loadPulls = useCallback(async (page: number, state: string, sort: string) => {
     setPullsLoading(true);
@@ -1348,6 +1410,7 @@ export default function RepoContextHub() {
         page,
         perPage: LIST_PAGE_SIZE,
         sort: sort === "newest" ? "created" : "updated",
+        provider: providerParam,
       });
       setPulls(data.items);
       setPullsTotalCount(data.totalCount);
@@ -1357,12 +1420,12 @@ export default function RepoContextHub() {
     } finally {
       setPullsLoading(false);
     }
-  }, [repoFullName]);
+  }, [providerParam, repoFullName]);
 
   const loadSecurity = useCallback(async () => {
     setSecurityLoading(true);
     try {
-      const data = await pipelineApi.getSecuritySummary(repoFullName);
+      const data = await pipelineApi.getSecuritySummary(repoFullName, providerParam);
       setSecurity(data);
       setSecurityLoaded(true);
     } catch (err) {
@@ -1370,7 +1433,7 @@ export default function RepoContextHub() {
     } finally {
       setSecurityLoading(false);
     }
-  }, [repoFullName]);
+  }, [providerParam, repoFullName]);
 
   // Load issues when tab is active or filters/page change
   useEffect(() => {
@@ -1394,6 +1457,10 @@ export default function RepoContextHub() {
   useEffect(() => {
     setSelectedIssue(null);
   }, [issuePage, issueStateFilter, issueSearchDebounced, repoFullName]);
+
+  useEffect(() => {
+    setIssueAvailability(null);
+  }, [issuePage, issueSearchDebounced, issueStateFilter, repoFullName]);
 
   useEffect(() => {
     setSelectedPull(null);
@@ -1707,7 +1774,7 @@ export default function RepoContextHub() {
   }
 
   const tabs: { key: Tab; label: string; icon: typeof CircleDot; count?: number }[] = [
-    { key: "issues", label: "Issues", icon: CircleDot, count: activity?.openIssues },
+    { key: "issues", label: "Issues", icon: CircleDot, count: issueAvailability?.status === "limited" ? undefined : activity?.openIssues },
     { key: "pulls", label: "Pull Requests", icon: GitPullRequest, count: activity?.openPRs },
     { key: "security", label: "Security", icon: ShieldAlert, count: securityLoaded ? security?.totalAlerts : undefined },
   ];
@@ -1732,7 +1799,7 @@ export default function RepoContextHub() {
       {
         key: "provider",
         icon: Sparkles,
-        label: repoMeta?.provider ? repoMeta.provider.charAt(0).toUpperCase() + repoMeta.provider.slice(1) : "Unknown",
+        label: providerLabel(repoMeta?.provider),
       },
       {
         key: "index",
@@ -1753,8 +1820,27 @@ export default function RepoContextHub() {
       },
       ...(repoMeta?.language ? [{ key: "language", icon: Sparkles, label: repoMeta.language }] : []),
       ...(repoMeta?.stars !== undefined ? [{ key: "stars", icon: Star, label: `${repoMeta.stars} stars` }] : []),
+      // Repo-policy badges (from linked repository config)
+      ...(linkedRepo ? [
+        {
+          key: "identity",
+          icon: linkedRepo.identityMode === IdentityMode.AssumeUser ? UserCheck : Bot,
+          label: linkedRepo.identityMode === IdentityMode.AssumeUser ? "Assume User" : "Service Account",
+        },
+        {
+          key: "webhook",
+          icon: Webhook,
+          label: linkedRepo.webhookActive ? "Webhook Active" : "No Webhook",
+          tone: linkedRepo.webhookActive ? "text-[var(--color-success-fg)]" : undefined,
+        },
+        ...(linkedRepo.defaultReviewer ? [{
+          key: "reviewer",
+          icon: UserCheck,
+          label: `Reviewer: @${linkedRepo.defaultReviewer}`,
+        }] : []),
+      ] : []),
     ];
-  }, [activeBranch, defaultBranch, repoMeta]);
+  }, [activeBranch, defaultBranch, linkedRepo, repoMeta]);
 
   return (
     <div data-flush-layout className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-canvas-default)] p-6">
@@ -1801,6 +1887,7 @@ export default function RepoContextHub() {
             repoFullName={repoFullName}
             activeBranch={activeBranch}
             defaultBranch={defaultBranch}
+            provider={providerParam}
             onSelect={handleBranchSelect}
           />
           <span className="text-[11px] text-[var(--color-fg-muted)]">
@@ -1814,7 +1901,7 @@ export default function RepoContextHub() {
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => handleTabChange(t.key)}
             className={cn(
               "flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors",
               tab === t.key
@@ -1877,19 +1964,38 @@ export default function RepoContextHub() {
 
           <div className="shrink-0 flex items-center gap-2 px-1 pb-1 text-[12px] text-[var(--color-fg-muted)]">
             <CircleDot className="h-3.5 w-3.5 text-[var(--color-danger-fg)]" />
-            <span>{issuesTotalCount} issue{issuesTotalCount === 1 ? "" : "s"}</span>
+            <span>
+              {issueAvailability?.status === "limited"
+                ? "Issue access limited"
+                : `${issuesTotalCount} issue${issuesTotalCount === 1 ? "" : "s"}`}
+            </span>
             {issuesLoading && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto pr-2 [scrollbar-gutter:stable] overscroll-contain">
             <div className="space-y-3 pb-2">
+            {issueAvailability?.status === "limited" && (
+              <div className="rounded-xl border border-[var(--color-warning-emphasis)]/40 bg-[var(--color-warning-subtle)] px-4 py-3 text-sm text-[var(--color-warning-fg)]">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">Issue permissions are limited for this connection.</p>
+                    <p className="mt-1 text-[13px] text-[var(--color-fg-muted)]">
+                      {issueAvailability.reason ?? "This token can reach the repository, but it cannot read issue data for this provider."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             {issuesLoading && !issuesLoaded ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-[var(--color-fg-muted)]" />
               </div>
             ) : issues.length === 0 && issuesLoaded ? (
               <div className="rounded-xl border border-[var(--color-border-default)] px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
-                No issues match the current filters.
+                {issueAvailability?.status === "limited"
+                  ? "Issue data is unavailable for this PAT. Add the required scope, then refresh."
+                  : "No issues match the current filters."}
               </div>
             ) : (
               issues.map((issue: ScmIssue) => (

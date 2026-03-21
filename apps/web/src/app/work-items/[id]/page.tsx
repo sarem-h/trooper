@@ -94,7 +94,7 @@ export default function WorkItemDetailPage({
         repositoryFullName: repoName || undefined,
       });
       // Navigate to the agent run detail page
-      router.push(`/agent/${result.runId}`);
+      router.push(`/work-items/runs/${result.runId}`);
     } catch (err: any) {
       setTriggerError(err.message);
       setTriggering(false);
@@ -236,7 +236,7 @@ export default function WorkItemDetailPage({
             <CardContent>
               {linkedRun ? (
                 <Link
-                  href={`/agent/${linkedRun.id}`}
+                  href={`/work-items/runs/${linkedRun.id}`}
                   className="flex items-center justify-between text-sm text-[var(--color-accent-fg)] hover:underline"
                 >
                   <span className="font-mono">{linkedRun.id}</span>

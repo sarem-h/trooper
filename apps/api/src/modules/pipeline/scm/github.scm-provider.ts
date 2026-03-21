@@ -25,6 +25,8 @@ import type {
 export class GitHubScmProvider implements ScmProvider {
   readonly providerType = 'github';
   private readonly logger = new Logger(GitHubScmProvider.name);
+  private readonly activityCache = new Map<string, { value: { openIssues: number; openPRs: number }; expiresAt: number }>();
+  private static readonly ACTIVITY_CACHE_TTL_MS = 60_000;
 
   static readonly capabilities: ScmCapabilities = {
     issues: true,
@@ -46,6 +48,41 @@ export class GitHubScmProvider implements ScmProvider {
 
   private async getRepoClient(repoFullName: string) {
     return this.github.getOctokit(repoFullName);
+  }
+
+  private readCachedActivity(repoFullName: string) {
+    const cached = this.activityCache.get(repoFullName);
+    if (!cached) return null;
+
+    if (cached.expiresAt <= Date.now()) {
+      this.activityCache.delete(repoFullName);
+      return null;
+    }
+
+    return cached.value;
+  }
+
+  private writeCachedActivity(repoFullName: string, value: { openIssues: number; openPRs: number }) {
+    this.activityCache.set(repoFullName, {
+      value,
+      expiresAt: Date.now() + GitHubScmProvider.ACTIVITY_CACHE_TTL_MS,
+    });
+  }
+
+  private getLastPageFromLinkHeader(linkHeader?: string) {
+    if (!linkHeader) return null;
+
+    const lastMatch = linkHeader.match(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="last"/);
+    if (lastMatch) {
+      return parseInt(lastMatch[1], 10);
+    }
+
+    const nextMatch = linkHeader.match(/<[^>]*[?&]page=(\d+)[^>]*>;\s*rel="next"/);
+    if (nextMatch) {
+      return parseInt(nextMatch[1], 10);
+    }
+
+    return null;
   }
 
   // ── Repository ──────────────────────────────────────────
@@ -668,24 +705,46 @@ async searchRepos(query: string, page: number = 1): Promise<ScmRepo[]> {
   // ── Enrichment ─────────────────────────────────────
 
   async getRepoActivity(repoFullName: string): Promise<{ openIssues: number; openPRs: number }> {
+    const cached = this.readCachedActivity(repoFullName);
+    if (cached) {
+      return cached;
+    }
+
     const octokit = await this.getRepoClient(repoFullName);
     const { owner, repo } = this.split(repoFullName);
-    const baseQuery = `repo:${owner}/${repo} is:open`;
-    const [issuesRes, prsRes] = await Promise.all([
-      octokit.search.issuesAndPullRequests({
-        q: `${baseQuery} is:issue`,
-        per_page: 1,
-      }),
-      octokit.search.issuesAndPullRequests({
-        q: `${baseQuery} is:pr`,
-        per_page: 1,
-      }),
-    ]);
 
-    return {
-      openIssues: issuesRes.data.total_count,
-      openPRs: prsRes.data.total_count,
-    };
+    try {
+      const [repoRes, prsRes] = await Promise.all([
+        octokit.repos.get({ owner, repo }),
+        octokit.pulls.list({
+          owner,
+          repo,
+          state: 'open',
+          per_page: 1,
+          sort: 'updated',
+          direction: 'desc',
+        }),
+      ]);
+
+      const openPRs = prsRes.data.length === 0
+        ? 0
+        : (this.getLastPageFromLinkHeader(prsRes.headers.link) ?? 1);
+      const openIssues = Math.max((repoRes.data.open_issues_count ?? 0) - openPRs, 0);
+      const value = { openIssues, openPRs };
+
+      this.writeCachedActivity(repoFullName, value);
+      return value;
+    } catch (error: any) {
+      if (error?.status === 403) {
+        const stale = this.activityCache.get(repoFullName)?.value;
+        if (stale) {
+          this.logger.warn(`GitHub activity lookup throttled for ${repoFullName}; serving cached counts.`);
+          return stale;
+        }
+      }
+
+      throw error;
+    }
   }
 
   async listLanguages(repoFullName: string): Promise<Record<string, number>> {

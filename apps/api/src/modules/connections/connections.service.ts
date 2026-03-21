@@ -4,6 +4,26 @@ import { AuthStatus, ConnectionAuthMethod, GitProvider } from '@trooper/shared';
 import type { CreateConnectionDto, UpdateConnectionDto } from '@trooper/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 
+/** Helper to call Azure DevOps REST endpoints with Basic PAT auth */
+async function azureDevOpsRequest<T>(url: string, token: string): Promise<T> {
+  const encoded = Buffer.from(`:${token}`).toString('base64');
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Basic ${encoded}`,
+      Accept: 'application/json',
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    const err: any = new Error(`Azure DevOps API ${res.status}: ${text}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  return res.json() as Promise<T>;
+}
+
 @Injectable()
 export class ConnectionsService {
   private readonly logger = new Logger(ConnectionsService.name);
@@ -80,10 +100,11 @@ export class ConnectionsService {
 
       const tokenMetadata = existing.provider === GitProvider.GitHub
         ? await this.buildGitHubConnectionMetadata(data.token, data.name ?? existing.name, data.expiresAt ?? undefined)
-        : this.buildAzureDevOpsMetadata({
+        : await this.buildAzureDevOpsMetadata({
             name: data.name ?? existing.name,
             providerAccountName: data.providerAccountName ?? existing.providerAccountName,
             providerUrl: data.providerUrl ?? existing.providerUrl,
+            token: data.token,
             expiresAt: data.expiresAt,
           });
 
@@ -199,9 +220,56 @@ export class ConnectionsService {
     return this.buildAzureDevOpsMetadata(data);
   }
 
+  /**
+   * Detect accessible scopes by probing well-known Azure DevOps APIs with the PAT.
+   * Returns a list of human-readable scope names the token can access.
+   */
+  private async detectAzureDevOpsScopes(token: string, orgUrl: string): Promise<string[]> {
+    const scopes: string[] = [];
+
+    const probes: Array<{ scope: string; path: string }> = [
+      { scope: 'vso.project', path: '/_apis/projects?$top=1' },
+      { scope: 'vso.code', path: '/_apis/git/repositories?$top=1' },
+      { scope: 'vso.work', path: '/_apis/wit/fields?$top=1' },
+      { scope: 'vso.build', path: '/_apis/build/builds?$top=1' },
+      { scope: 'vso.release', path: '/_apis/release/releases?$top=1' },
+    ];
+
+    for (const probe of probes) {
+      try {
+        const encoded = Buffer.from(`:${token}`).toString('base64');
+        const res = await fetch(`${orgUrl}${probe.path}&api-version=7.1-preview.1`, {
+          headers: { Authorization: `Basic ${encoded}`, Accept: 'application/json' },
+        });
+        if (res.ok) {
+          scopes.push(probe.scope);
+        }
+      } catch {
+        // Scope not accessible — skip
+      }
+    }
+
+    return scopes;
+  }
+
   private async buildGitHubConnectionMetadata(token: string, name: string, expiresAt?: string) {
     const octokit = new Octokit({ auth: token });
-    const response = await octokit.request('GET /user');
+
+    let response;
+    try {
+      response = await octokit.request('GET /user');
+    } catch (error: any) {
+      if (error?.status === 401) {
+        throw new BadRequestException('GitHub rejected this token. Check that the PAT value is correct and still active.');
+      }
+
+      if (error?.status === 403) {
+        throw new BadRequestException('GitHub accepted the token format but denied access. Check the token permissions and repository access.');
+      }
+
+      throw error;
+    }
+
     const scopesHeader = response.headers['x-oauth-scopes'];
     const scopes = typeof scopesHeader === 'string'
       ? scopesHeader.split(',').map((scope) => scope.trim()).filter(Boolean)
@@ -221,7 +289,7 @@ export class ConnectionsService {
     };
   }
 
-  private buildAzureDevOpsMetadata(data: {
+  private async buildAzureDevOpsMetadata(data: {
     name: string;
     providerAccountName?: string;
     providerUrl?: string;
@@ -239,16 +307,49 @@ export class ConnectionsService {
       throw new BadRequestException('Azure DevOps connections require an organization name or URL Trooper can parse.');
     }
 
+    // Validate the PAT against Azure DevOps if a token is provided
+    // Normalize trailing slash so path concatenation is safe
+    const normalizedUrl = providerUrl.replace(/\/+$/, '');
+
+    let validatedAccountName = providerAccountName;
+    let scopes: string[] = [];
+
+    if (data.token) {
+      // Validate PAT against the org's own connectionData endpoint.
+      // This simultaneously checks the token AND verifies access to the specific org,
+      // unlike the global VSSPS profile API which can reject org-scoped PATs.
+      try {
+        const connData = await azureDevOpsRequest<{ authenticatedUser?: { providerDisplayName?: string; customDisplayName?: string; id?: string } }>(
+          `${normalizedUrl}/_apis/connectionData?api-version=7.1-preview.1`,
+          data.token,
+        );
+        const displayName = connData.authenticatedUser?.customDisplayName ?? connData.authenticatedUser?.providerDisplayName;
+        validatedAccountName = providerAccountName || displayName || validatedAccountName;
+        this.logger.log(`Azure DevOps PAT validated for org ${providerAccountName}: user ${displayName ?? 'unknown'}`);
+      } catch (error: any) {
+        if (error?.status === 401) {
+          throw new BadRequestException('Azure DevOps rejected this token. Check that the PAT value is correct and still active.');
+        }
+        if (error?.status === 403) {
+          throw new BadRequestException('Azure DevOps accepted the token but denied access to this organization. Check the token permissions and org scope.');
+        }
+        throw new BadRequestException(`Azure DevOps token validation failed: ${error.message}`);
+      }
+
+      // Detect scopes by probing known endpoints
+      scopes = await this.detectAzureDevOpsScopes(data.token, normalizedUrl);
+    }
+
     return {
       name: data.name.trim(),
       provider: GitProvider.AzureRepos,
       authMethod: ConnectionAuthMethod.PAT,
-      providerAccountName,
-      providerUrl,
+      providerAccountName: validatedAccountName,
+      providerUrl: normalizedUrl,
       secretToken: data.token,
       secretLastFour: data.token?.slice(-4),
       status: AuthStatus.Active,
-      scopes: [],
+      scopes,
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
     };
   }

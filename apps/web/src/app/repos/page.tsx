@@ -44,28 +44,72 @@ interface DisplayRepo extends RepoInfo {
   source: "local" | "github";
 }
 
-const PROVIDER_META: Record<string, { label: string; color: string; icon: string }> = {
-  github:    { label: 'GitHub',    color: 'var(--color-fg-default)', icon: '' },
-  gitlab:    { label: 'GitLab',    color: '#fc6d26', icon: '' },
-  bitbucket: { label: 'Bitbucket', color: '#0052cc', icon: '' },
-  azure:     { label: 'Azure',     color: '#0078d4', icon: '' },
+const PROVIDER_META: Record<string, { label: string; color: string; background: string; icon: string }> = {
+  github:      { label: 'GitHub', color: '#7c3aed', background: 'rgba(124, 58, 237, 0.1)', icon: '' },
+  gitlab:      { label: 'GitLab', color: '#fc6d26', background: 'rgba(252, 109, 38, 0.1)', icon: '' },
+  bitbucket:   { label: 'Bitbucket', color: '#0052cc', background: 'rgba(0, 82, 204, 0.1)', icon: '' },
+  azure:       { label: 'Azure', color: '#0078d4', background: 'rgba(0, 120, 212, 0.1)', icon: '' },
+  azure_repos: { label: 'Azure DevOps', color: '#0078d4', background: 'rgba(0, 120, 212, 0.1)', icon: '' },
 };
 
 function ProviderBadge({ provider }: { provider: string }) {
-  const meta = PROVIDER_META[provider] ?? { label: provider, color: 'var(--color-fg-muted)', icon: '' };
+  const meta = PROVIDER_META[provider] ?? {
+    label: provider,
+    color: 'var(--color-fg-muted)',
+    background: 'var(--color-canvas-subtle)',
+    icon: '',
+  };
   return (
     <span
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border"
+      className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium leading-none"
       style={{
         color: meta.color,
-        borderColor: `${meta.color}40`,
-        background: `${meta.color}12`,
+        background: meta.background,
       }}
     >
-      {meta.icon && <span aria-hidden>{meta.icon}</span>}
-      {meta.label}
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ background: meta.color }}
+      />
+      <span>{meta.label}</span>
     </span>
   );
+}
+
+function RepoSourceIcon({ provider, private: isPrivate }: { provider: string; private: boolean }) {
+  const meta = PROVIDER_META[provider] ?? {
+    label: provider,
+    color: 'var(--color-fg-muted)',
+    background: 'var(--color-canvas-subtle)',
+    icon: '',
+  };
+
+  if (provider === "azure_repos" || provider === "azure") {
+    return (
+      <span
+        className="relative flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border"
+        style={{
+          color: meta.color,
+          borderColor: `${meta.color}35`,
+          background: `${meta.color}10`,
+        }}
+        title={meta.label}
+      >
+        <span className="grid h-2.5 w-2.5 grid-cols-2 gap-[1px]">
+          <span className="rounded-[1px] bg-current" />
+          <span className="rounded-[1px] bg-current opacity-90" />
+          <span className="rounded-[1px] bg-current opacity-90" />
+          <span className="rounded-[1px] bg-current" />
+        </span>
+        {isPrivate && <Lock className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-[var(--color-canvas-default)] p-[1px] text-[var(--color-attention-fg)]" />}
+      </span>
+    );
+  }
+
+  return isPrivate
+    ? <Lock className="h-4 w-4 shrink-0 text-[var(--color-attention-fg)]" />
+    : <FolderGit2 className="h-4 w-4 shrink-0 text-[var(--color-accent-fg)]" />;
 }
 
 function SourceBadge({ source }: { source: "local" | "github" }) {
@@ -152,7 +196,7 @@ function enqueue<T>(label: string, key: string, fn: () => Promise<T>): Promise<T
 
 const activityCache = new Map<string, { openIssues: number; openPRs: number }>();
 
-function ActivityCell({ repoFullName }: { repoFullName: string }) {
+function ActivityCell({ repoFullName, provider }: { repoFullName: string, provider?: string }) {
   const [data, setData] = useState(activityCache.get(repoFullName) ?? null);
   const [loading, setLoading] = useState(!activityCache.has(repoFullName));
 
@@ -164,7 +208,7 @@ function ActivityCell({ repoFullName }: { repoFullName: string }) {
     const key = `activity:${repoFullName}`;
     logTiming(`ActivityCell [${repoFullName}] — mount, scheduling fetch`);
     let cancelled = false;
-    const p = enqueue(key, key, () => pipelineApi.getRepoActivity(repoFullName));
+    const p = enqueue(key, key, () => pipelineApi.getRepoActivity(repoFullName, provider));
     p.then((d) => {
         activityCache.set(repoFullName, d);
         if (!cancelled) setData(d);
@@ -203,7 +247,7 @@ function ActivityCell({ repoFullName }: { repoFullName: string }) {
 
 const languagesCache = new Map<string, Record<string, number>>();
 
-function LanguagesCell({ repoFullName, primaryLanguage }: { repoFullName: string, primaryLanguage?: string }) {
+function LanguagesCell({ repoFullName, primaryLanguage, provider }: { repoFullName: string, primaryLanguage?: string, provider?: string }) {
   const [langs, setLangs] = useState<Record<string, number> | null>(languagesCache.get(repoFullName) ?? null);
 
   useEffect(() => {
@@ -217,7 +261,7 @@ function LanguagesCell({ repoFullName, primaryLanguage }: { repoFullName: string
     logTiming(`LanguagesCell [${repoFullName}] — mount, scheduling fetch`);
     let cancelled = false;
     const key = `langs:${repoFullName}`;
-    const p = enqueue(key, key, () => pipelineApi.getRepoLanguages(repoFullName));
+    const p = enqueue(key, key, () => pipelineApi.getRepoLanguages(repoFullName, provider));
     p.then((d) => {
         languagesCache.set(repoFullName, d);
         if (!cancelled) setLangs(d);
@@ -311,6 +355,8 @@ const FILTER_META: Record<string, { label: string; Icon: typeof FolderGit2 }> = 
   private: { label: "Private", Icon: Lock },
   indexed: { label: "Indexed", Icon: Zap },
 };
+
+
 
 // ─── Main Page: Git Explorer ────────────────────────
 
@@ -429,7 +475,7 @@ export default function ReposPage() {
   const handleNavigate = (repo: RepoInfo) => {
     addRecentlyViewed(repo.fullName);
     setRecentlyViewed(getRecentlyViewed());
-    router.push(`/repos/${repo.fullName}`);
+    router.push(`/repos/${repo.fullName}?provider=${repo.provider}`);
   };
 
   // ─── Status Bar Label ────────────────────────────
@@ -487,7 +533,7 @@ export default function ReposPage() {
     <div data-flush-layout className="flex flex-col h-full border-t border-[var(--color-border-default)] overflow-hidden bg-[var(--color-canvas-default)] font-sans select-none">
 
       {/* ─── Toolbar ────────────────────────────────── */}
-      <div className="border-b border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-4 pt-3.5 pb-5 shrink-0">
+      <div className="border-b border-[var(--color-border-default)] bg-[var(--color-canvas-subtle)] px-4 pt-3 pb-3 shrink-0">
         <div className="flex items-center gap-3 w-full">
           <div className="flex items-center h-10 px-3 bg-[var(--color-canvas-subtle)] border border-[var(--color-border-default)] rounded-lg text-[13px] text-[var(--color-fg-default)] shadow-sm gap-2 min-w-0 shrink-0">
             <StatusIcon className="h-3.5 w-3.5 text-[var(--color-fg-muted)] shrink-0" />
@@ -521,19 +567,33 @@ export default function ReposPage() {
         </div>
       </div>
 
-      {/* ─── Spacer ─────────────────────────────────── */}
-      <div className="h-4 shrink-0 bg-[var(--color-canvas-default)]" />
-
       {/* ─── Left Sidebar + Main Content ──────────────── */}
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
+
+        <div className="pointer-events-none absolute left-0 right-0 top-[32px] z-20 border-b border-[var(--color-border-default)]" />
 
         {/* Sidebar Navigation */}
-        <div className="w-56 flex-shrink-0 bg-[var(--color-canvas-default)] border-r border-[var(--color-border-default)] overflow-y-auto py-2 flex flex-col gap-4">
+        <div className="w-56 flex-shrink-0 bg-[var(--color-canvas-default)] border-r border-[var(--color-border-default)] overflow-y-auto flex flex-col gap-2.5">
+
+          <div className="flex h-[32px] items-center px-3 select-none shrink-0">
+            <div className="flex items-center gap-2">
+              <div className="relative h-4.5 w-4.5 rounded-[5px] bg-[linear-gradient(180deg,_rgba(255,255,255,0.96),_rgba(244,247,250,0.98))] ring-1 ring-black/5">
+                <div className="absolute left-[3px] top-[3px] h-1.5 w-1.5 rounded-[2px] bg-[var(--color-accent-emphasis)]" />
+                <div className="absolute bottom-[3px] right-[3px] h-1.5 w-1.5 rounded-[2px] bg-[var(--color-success-emphasis)]" />
+                <div className="absolute left-[5px] top-[8px] h-px w-2 rotate-[-38deg] bg-[var(--color-fg-muted)]" />
+              </div>
+              <div className="min-w-0 leading-none">
+                <div className="truncate text-[11px] font-semibold text-[var(--color-fg-default)]">
+                  Git Explorer
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Recently Viewed */}
           {recentlyViewed.length > 0 && (
             <div>
-              <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
+              <div className="flex items-center gap-1.5 px-3 pb-0.5 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
                 <Clock className="h-3 w-3" />
                 Recently Viewed
               </div>
@@ -559,7 +619,7 @@ export default function ReposPage() {
 
           {/* Filters */}
           <div>
-            <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
+            <div className="flex items-center gap-1.5 px-3 pb-0.5 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
               Filters
             </div>
             <NavItem id="all" label="All Repositories" icon={FolderGit2} count={myRepos.length} />
@@ -571,7 +631,7 @@ export default function ReposPage() {
           {/* Accounts */}
           {owners.length > 0 && (
             <div>
-              <div className="flex items-center gap-1.5 px-3 pb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
+              <div className="flex items-center gap-1.5 px-3 pb-0.5 text-[11px] font-medium uppercase tracking-wider text-[var(--color-fg-muted)]">
                 Accounts
               </div>
               {owners.map(owner => (
@@ -598,14 +658,14 @@ export default function ReposPage() {
 
           {!loading && (
             <table className="w-full table-fixed text-[13px] text-left border-collapse whitespace-nowrap">
-              <thead className="sticky top-0 bg-[var(--color-canvas-default)] z-10 shadow-[0_1px_0_var(--color-border-default)]">
-                <tr className="hover:bg-transparent">
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[30%]">Name</th>
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[15%]">Status / Visibility</th>
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[12%]">Language</th>
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[10%]">Default Branch</th>
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[12%]">Issues & PRs</th>
-                  <th className="py-1 px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] w-[13%]">Stars</th>
+              <thead className="sticky top-0 bg-[var(--color-canvas-default)] z-10">
+                <tr className="hover:bg-transparent h-[32px]">
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[30%] align-middle">Name</th>
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[15%] align-middle">Status / Visibility</th>
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[12%] align-middle">Language</th>
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[10%] align-middle">Default Branch</th>
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] border-r border-[var(--color-border-default)] w-[12%] align-middle">Issues & PRs</th>
+                  <th className="px-3 font-normal text-[var(--color-fg-muted)] hover:bg-[var(--color-canvas-subtle)] w-[13%] align-middle">Stars</th>
                 </tr>
               </thead>
               <tbody className="bg-[var(--color-canvas-default)] divide-y divide-transparent">
@@ -635,10 +695,13 @@ export default function ReposPage() {
                             >
                               <td className="py-[7px] px-3">
                                 <div className="flex items-center gap-2">
-                                  {repo.private ? <Lock className="h-4 w-4 text-[var(--color-attention-fg)] shrink-0" /> : <FolderGit2 className="h-4 w-4 text-[var(--color-success-fg)] shrink-0" />}
+                                  <RepoSourceIcon provider={repo.provider} private={repo.private} />
                                   <div className="flex flex-col min-w-0 leading-tight">
                                     <span className="font-medium text-[var(--color-fg-default)] group-hover:text-[var(--color-success-fg)] truncate" onClick={() => handleNavigate(repo)}>{name}</span>
-                                    <span className="text-[11px] text-[var(--color-fg-muted)] truncate">{owner}</span>
+                                    <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-fg-muted)]">
+                                      <span className="truncate">{owner}</span>
+                                      <ProviderBadge provider={repo.provider} />
+                                    </div>
                                   </div>
                                 </div>
                               </td>
@@ -648,9 +711,9 @@ export default function ReposPage() {
                                   {repo.indexed && <div className="flex items-center gap-1 text-[11px] text-[var(--color-success-fg)]" title={`${repo.indexedFiles} files indexed`}><Database className="h-3 w-3" /><span className="hidden xl:inline">Indexed</span></div>}
                                 </div>
                               </td>
-                              <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} /></td>
+                              <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} provider={repo.provider} /></td>
                               <td className="py-[7px] px-3 overflow-hidden"><DefaultBranchBadge branch={repo.defaultBranch} /></td>
-                              <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} /></td>
+                              <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} provider={repo.provider} /></td>
                               <td className="py-[7px] px-3">
                                 {repo.stars !== undefined && repo.stars > 0 ? (
                                   <span className="flex items-center gap-1 text-[12px]"><Star className="h-3 w-3 text-[var(--color-warning-fg)]" /><span className="tabular-nums text-[var(--color-fg-default)]">{repo.stars >= 1000 ? `${(repo.stars / 1000).toFixed(1)}k` : repo.stars}</span></span>
@@ -695,10 +758,13 @@ export default function ReposPage() {
                             >
                               <td className="py-[7px] px-3">
                                 <div className="flex items-center gap-2">
-                                  <Globe className="h-4 w-4 text-[var(--color-accent-fg)] shrink-0" />
+                                  <RepoSourceIcon provider={repo.provider} private={repo.private} />
                                   <div className="flex flex-col min-w-0 leading-tight">
                                     <span className="font-medium text-[var(--color-fg-default)] group-hover:text-[var(--color-accent-fg)] truncate" onClick={() => handleNavigate(repo)}>{name}</span>
-                                    <span className="text-[11px] text-[var(--color-fg-muted)] truncate">{owner}</span>
+                                    <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-fg-muted)]">
+                                      <span className="truncate">{owner}</span>
+                                      <ProviderBadge provider={repo.provider} />
+                                    </div>
                                   </div>
                                 </div>
                               </td>
@@ -707,9 +773,9 @@ export default function ReposPage() {
                                   <Badge variant={repo.private ? "default" : "info"} className="text-[9px] px-1 py-0 h-4">{repo.private ? "Private" : "Public"}</Badge>
                                 </div>
                               </td>
-                              <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} /></td>
+                              <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} provider={repo.provider} /></td>
                               <td className="py-[7px] px-3 overflow-hidden"><DefaultBranchBadge branch={repo.defaultBranch} /></td>
-                              <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} /></td>
+                              <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} provider={repo.provider} /></td>
                               <td className="py-[7px] px-3">
                                 {repo.stars !== undefined && repo.stars > 0 ? (
                                   <span className="flex items-center gap-1 text-[12px]"><Star className="h-3 w-3 text-[var(--color-warning-fg)]" /><span className="tabular-nums text-[var(--color-fg-default)]">{repo.stars >= 1000 ? `${(repo.stars / 1000).toFixed(1)}k` : repo.stars}</span></span>
@@ -756,10 +822,19 @@ export default function ReposPage() {
                         >
                           <td className="py-[7px] px-3">
                             <div className="flex items-center gap-2">
-                              {repo.private ? <Lock className="h-4 w-4 text-[var(--color-attention-fg)] shrink-0" /> : <FolderGit2 className="h-4 w-4 text-[var(--color-accent-fg)] shrink-0" />}
+                              <RepoSourceIcon provider={repo.provider} private={repo.private} />
                               <div className="flex flex-col min-w-0 leading-tight">
                                 <span className="font-medium text-[var(--color-fg-default)] group-hover:text-[var(--color-accent-fg)] truncate" onClick={() => handleNavigate(repo)}>{name}</span>
-                                {currentNode !== `owner:${owner}` && <span className="text-[11px] text-[var(--color-fg-muted)] truncate">{owner}</span>}
+                                {currentNode !== `owner:${owner}` ? (
+                                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-fg-muted)]">
+                                    <span className="truncate">{owner}</span>
+                                    <ProviderBadge provider={repo.provider} />
+                                  </div>
+                                ) : (
+                                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-fg-muted)]">
+                                    <ProviderBadge provider={repo.provider} />
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </td>
@@ -769,9 +844,9 @@ export default function ReposPage() {
                                   {repo.indexed && <div className="flex items-center gap-1 text-[11px] text-[var(--color-success-fg)]" title={`${repo.indexedFiles} files indexed`}><Database className="h-3 w-3" /><span className="hidden xl:inline">Indexed</span></div>}
                             </div>
                           </td>
-                          <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} /></td>
+                          <td className="py-[7px] px-3 overflow-hidden"><LanguagesCell repoFullName={repo.fullName} primaryLanguage={repo.language} provider={repo.provider} /></td>
                           <td className="py-[7px] px-3 overflow-hidden"><DefaultBranchBadge branch={repo.defaultBranch} /></td>
-                          <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} /></td>
+                          <td className="py-[7px] px-3 overflow-hidden"><ActivityCell repoFullName={repo.fullName} provider={repo.provider} /></td>
                           <td className="py-[7px] px-3">
                             {repo.stars !== undefined && repo.stars > 0 ? (
                                   <span className="flex items-center gap-1 text-[12px] text-[var(--color-fg-muted)]"><Star className="h-3 w-3 text-[var(--color-warning-fg)]" /><span className="tabular-nums text-[var(--color-fg-default)]">{repo.stars >= 1000 ? `${(repo.stars / 1000).toFixed(1)}k` : repo.stars}</span></span>

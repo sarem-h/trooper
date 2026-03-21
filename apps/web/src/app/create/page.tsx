@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,13 +10,11 @@ import {
   Loader2,
   Github,
   Database,
-  CheckCircle2,
-  AlertCircle,
   RefreshCw,
-  Lock,
-  Search,
 } from "lucide-react";
 import { pipeline, indexing } from "@/lib/api";
+
+const ACTIVE_SKILL_EXECUTION_KEY = "trooper.skills.execution.v1";
 
 interface RepoInfo {
   fullName: string;
@@ -28,18 +26,60 @@ interface RepoInfo {
   indexedFiles: number;
 }
 
-export default function NewTaskPage() {
+interface ActiveSkillExecution {
+  id: string;
+  name: string;
+  prompt: string;
+  specFull: string;
+  specUi?: string;
+}
+
+function readActiveSkillExecutionFromStorage(): ActiveSkillExecution | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_SKILL_EXECUTION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ActiveSkillExecution & { markdown?: string };
+    return {
+      ...parsed,
+      specFull: parsed.specFull ?? parsed.markdown ?? "",
+      specUi: parsed.specUi ?? parsed.markdown,
+    };
+  } catch {
+    window.localStorage.removeItem(ACTIVE_SKILL_EXECUTION_KEY);
+    return null;
+  }
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+import { Suspense } from "react";
+
+function CreateTaskPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [reposLoading, setReposLoading] = useState(true);
 
   const [repoName, setRepoName] = useState("");
-  const [userQuery, setUserQuery] = useState("");
+  const [userQuery, setUserQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+
+    return readActiveSkillExecutionFromStorage()?.prompt ?? "";
+  });
+  const [activeSkill, setActiveSkill] = useState<ActiveSkillExecution | null>(() => readActiveSkillExecutionFromStorage());
   const [triggering, setTriggering] = useState(false);
   const [indexingSyncing, setIndexingSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedRepo = repos.find((r) => r.fullName === repoName);
+  const selectedRepo = repos.find((repo) => repo.fullName === repoName);
 
   useEffect(() => {
     pipeline.repos()
@@ -47,6 +87,20 @@ export default function NewTaskPage() {
       .catch(console.error)
       .finally(() => setReposLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("source") !== "skill") return;
+    if (typeof window === "undefined") return;
+
+    const parsed = readActiveSkillExecutionFromStorage();
+    if (!parsed) {
+      setActiveSkill(null);
+      return;
+    }
+
+    setActiveSkill(parsed);
+    setUserQuery(parsed.prompt ?? "");
+  }, [searchParams]);
 
   async function handleIndex() {
     if (!selectedRepo || indexingSyncing) return;
@@ -69,11 +123,10 @@ export default function NewTaskPage() {
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
 
-      // Refresh repo list to get updated index status
       const updated = await pipeline.repos();
       setRepos(updated);
-    } catch (err: any) {
-      setError(`Indexing failed: ${err.message}`);
+    } catch (error: unknown) {
+      setError(`Indexing failed: ${getErrorMessage(error, "Indexing failed")}`);
     } finally {
       setIndexingSyncing(false);
     }
@@ -86,11 +139,11 @@ export default function NewTaskPage() {
     try {
       const result = await pipeline.trigger({
         repositoryFullName: repoName,
-        userQuery: userQuery,
+        userQuery,
       });
-      router.push(`/agent/${result.runId}`);
-    } catch (err: any) {
-      setError(err.message);
+      router.push(`/work-items/runs/${result.runId}`);
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Failed to start task"));
       setTriggering(false);
     }
   }
@@ -106,13 +159,25 @@ export default function NewTaskPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 py-8">
+    <div className="mx-auto max-w-2xl space-y-6 py-8">
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-fg-default)]">New Task</h1>
-        <p className="text-sm text-[var(--color-fg-muted)] mt-1">
+        <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
           Select a repository and describe what you want Trooper to do. Trooper will analyze the codebase and propose a plan before making any changes.
         </p>
       </div>
+
+      {activeSkill ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border-default)] bg-white px-4 py-3 shadow-[0_6px_18px_rgba(31,41,55,0.06)]">
+          <div>
+            <div className="text-sm font-semibold text-[var(--color-fg-default)]">Using saved skill</div>
+            <div className="mt-1 text-xs text-[var(--color-fg-subtle)]">
+              {activeSkill.name} is loaded into the task prompt. Pick the target repository below to run it.
+            </div>
+          </div>
+          <Badge variant="done">Skill attached</Badge>
+        </div>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -122,9 +187,8 @@ export default function NewTaskPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Repository selector */}
           <div>
-            <label className="block text-sm font-medium text-[var(--color-fg-default)] mb-2">
+            <label className="mb-2 block text-sm font-medium text-[var(--color-fg-default)]">
               Repository
             </label>
             <select
@@ -134,27 +198,32 @@ export default function NewTaskPage() {
               className="w-full rounded-md border border-[var(--color-border-default)] bg-[var(--color-canvas-inset)] px-3 py-2 text-sm text-[var(--color-fg-default)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent-fg)]"
             >
               <option value="">
-                {reposLoading ? "Loading repositories…" : "Select a repository"}
+                {reposLoading ? "Loading repositoriesâ€¦" : "Select a repository"}
               </option>
-              {repos.map((r) => (
-                <option key={r.fullName} value={r.fullName}>
-                  {r.fullName}{r.private ? " 🔒" : ""}{r.indexed ? " ✓ Indexed" : ""}
+              {repos.map((repo) => (
+                <option key={repo.fullName} value={repo.fullName}>
+                  {repo.fullName}{repo.private ? " ðŸ”’" : ""}{repo.indexed ? " âœ“ Indexed" : ""}
                 </option>
               ))}
             </select>
           </div>
 
-          {/* Index status card — shown when a repo is selected */}
           {selectedRepo && (
-            <div className={`flex items-center justify-between rounded-lg border px-4 py-3 ${
-              selectedRepo.indexed
-                ? "border-[var(--color-success-emphasis)] border-opacity-40 bg-[var(--color-success-subtle)]"
-                : "border-[var(--color-warning-emphasis)] border-opacity-40 bg-[var(--color-warning-subtle)]"
-            }`}>
+            <div
+              className={`flex items-center justify-between rounded-lg border px-4 py-3 ${
+                selectedRepo.indexed
+                  ? "border-[var(--color-success-emphasis)] border-opacity-40 bg-[var(--color-success-subtle)]"
+                  : "border-[var(--color-warning-emphasis)] border-opacity-40 bg-[var(--color-warning-subtle)]"
+              }`}
+            >
               <div className="flex items-center gap-3">
-                <Database className={`h-4 w-4 ${
-                  selectedRepo.indexed ? "text-[var(--color-success-fg)]" : "text-[var(--color-warning-fg)]"
-                }`} />
+                <Database
+                  className={`h-4 w-4 ${
+                    selectedRepo.indexed
+                      ? "text-[var(--color-success-fg)]"
+                      : "text-[var(--color-warning-fg)]"
+                  }`}
+                />
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-[var(--color-fg-default)]">
@@ -163,14 +232,14 @@ export default function NewTaskPage() {
                     {selectedRepo.indexed ? (
                       <Badge variant="success">Indexed</Badge>
                     ) : selectedRepo.indexStatus === "syncing" ? (
-                      <Badge variant="info">Syncing…</Badge>
+                      <Badge variant="info">Syncingâ€¦</Badge>
                     ) : (
                       <Badge variant="warning">Not Indexed</Badge>
                     )}
                   </div>
-                  <p className="text-xs text-[var(--color-fg-subtle)] mt-0.5">
+                  <p className="mt-0.5 text-xs text-[var(--color-fg-subtle)]">
                     {selectedRepo.indexed
-                      ? `${selectedRepo.indexedFiles} files indexed${selectedRepo.lastSyncAt ? ` · Last sync ${timeAgo(selectedRepo.lastSyncAt)}` : ""}`
+                      ? `${selectedRepo.indexedFiles} files indexed${selectedRepo.lastSyncAt ? ` Â· Last sync ${timeAgo(selectedRepo.lastSyncAt)}` : ""}`
                       : "Index this repo for faster, more accurate plans. Trooper will auto-index if needed, but pre-indexing is recommended."}
                   </p>
                 </div>
@@ -185,7 +254,7 @@ export default function NewTaskPage() {
                 {indexingSyncing ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Indexing…
+                    Indexingâ€¦
                   </>
                 ) : selectedRepo.indexed ? (
                   <>
@@ -202,9 +271,8 @@ export default function NewTaskPage() {
             </div>
           )}
 
-          {/* Query input */}
           <div>
-            <label className="block text-sm font-medium text-[var(--color-fg-default)] mb-2">
+            <label className="mb-2 block text-sm font-medium text-[var(--color-fg-default)]">
               What should Trooper do?
             </label>
             <textarea
@@ -217,13 +285,12 @@ export default function NewTaskPage() {
           </div>
 
           {error && (
-            <div className="p-3 rounded-md bg-[var(--color-danger-subtle)] text-[var(--color-danger-fg)] text-sm">
+            <div className="rounded-md bg-[var(--color-danger-subtle)] p-3 text-sm text-[var(--color-danger-fg)]">
               {error}
             </div>
           )}
 
           <div className="flex items-center justify-between">
-            {/* Info text */}
             <p className="text-xs text-[var(--color-fg-subtle)]">
               {selectedRepo && !selectedRepo.indexed
                 ? "Trooper will automatically index this repo before planning."
@@ -250,5 +317,13 @@ export default function NewTaskPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function CreateTaskPage() {
+  return (
+    <Suspense fallback={<div>Loading component...</div>}>
+      <CreateTaskPageContent />
+    </Suspense>
   );
 }

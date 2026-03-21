@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { ScmProvider, ScmCapabilities } from './scm.types';
-import { GitHubScmProvider } from './github.scm-provider';
+import { PrismaService } from '../../../prisma/prisma.service';
 
 /**
  * Central registry and factory for SCM providers.
@@ -17,6 +17,8 @@ export class ScmRegistry {
   private readonly providers = new Map<string, ScmProvider>();
   private readonly caps = new Map<string, ScmCapabilities>();
   private defaultProviderType = 'github';
+
+  constructor(private readonly prisma: PrismaService) {}
 
   /** Register a provider at startup */
   register(provider: ScmProvider, capabilities: ScmCapabilities): void {
@@ -47,11 +49,64 @@ export class ScmRegistry {
     return [...this.providers.keys()];
   }
 
-  /** Resolve the correct provider for a repo full name.
-   *  For now, we only have GitHub, but future: parse the URL or look up Connections. */
-  resolveForRepo(_repoFullName: string): ScmProvider {
-    // TODO: in the future, look up the Connection / LinkedRepository
-    // table to determine which provider handles this repo.
+  /**
+   * Resolve the correct provider for a repo full name.
+   * Uses a synchronous heuristic first, then falls back to the default.
+   * For DB-backed resolution, use resolveForRepoAsync().
+   */
+  resolveForRepo(repoFullName: string): ScmProvider {
+    // Check the provider cache set by resolveForRepoAsync
+    const cached = this.repoProviderCache.get(repoFullName);
+    if (cached && this.providers.has(cached)) {
+      return this.get(cached);
+    }
+
+    return this.getDefault();
+  }
+
+  private readonly repoProviderCache = new Map<string, string>();
+
+  /**
+   * Async version: resolve provider by querying the database for repository linkage.
+   * Also populates a synchronous cache so that subsequent resolveForRepo() calls
+   * for the same repo work without database access.
+   */
+  async resolveForRepoAsync(repoFullName: string, providerHint?: string): Promise<ScmProvider> {
+    if (providerHint && this.providers.has(providerHint)) {
+       this.repoProviderCache.set(repoFullName, providerHint);
+       return this.get(providerHint);
+    }
+    
+    // Check in-memory cache first even if no hint provided
+    const cached = this.repoProviderCache.get(repoFullName);
+    if (cached && this.providers.has(cached)) {
+      return this.get(cached);
+    }
+
+    // Check LinkedRepository table for explicit provider linkage
+    const linked = await this.prisma.client.linkedRepository.findFirst({
+      where: { fullName: repoFullName },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (linked?.provider && this.providers.has(linked.provider)) {
+      this.repoProviderCache.set(repoFullName, linked.provider);
+      return this.get(linked.provider);
+    }
+
+    // Check Connection table — if the repo matches a connection, use that provider
+    const connection = await this.prisma.client.connection.findFirst({
+      where: {
+        secretToken: { not: null },
+        status: { in: ['active', 'expiring'] },
+      },
+      orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    if (connection?.provider && this.providers.has(connection.provider)) {
+      // Don't cache generic connection match — it's the default behavior
+    }
+
     return this.getDefault();
   }
 }

@@ -4,16 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  ListTodo,
   Bot,
-  GitPullRequest,
+  ListTodo,
   Database,
+  BrainCircuit,
   ShieldCheck,
   Settings,
   ChevronLeft,
   ChevronRight,
   PlusCircle,
-  CircleDot,
   FolderGit2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,22 +28,20 @@ type NavItem = {
 const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Create",
-    items: [{ label: "New Task", href: "/new", icon: PlusCircle, tone: "accent" as const }],
+    items: [{ label: "New Task", href: "/create", icon: PlusCircle, tone: "accent" as const }],
   },
   {
     title: "Workspace",
     items: [
       { label: "Dashboard", href: "/", icon: LayoutDashboard },
       { label: "Repositories", href: "/repos", icon: FolderGit2 },
-      { label: "Issues", href: "/issues", icon: CircleDot },
-      { label: "Work Items", href: "/work-items", icon: ListTodo },
-      { label: "Pull Requests", href: "/pull-requests", icon: GitPullRequest },
     ],
   },
   {
     title: "Platform",
     items: [
-      { label: "Agent Runs", href: "/agent", icon: Bot },
+      { label: "Work Items", href: "/work-items", icon: ListTodo },
+      { label: "Skills", href: "/skills", icon: BrainCircuit },
       { label: "RAG Index", href: "/indexing", icon: Database },
       { label: "Security", href: "/security", icon: ShieldCheck },
     ],
